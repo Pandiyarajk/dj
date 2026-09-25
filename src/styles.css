@@ -2,40 +2,82 @@
  * dj: console styles.
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (hardware-style design pass: layered panels, LED
+ *   states, custom faders with scale marks, segmented meters, transport
+ *   icons, LCD readouts; hot-cue colours, track-end warning, limiter LED,
+ *   phase meter, zoom, tablet and phone layouts, reduced-motion feedback)
+ *
+ * System fonts only: the app makes no network requests, so a font CDN would
+ * break the "your music stays on your machine" promise.
  */
 
 :root {
   color-scheme: dark;
-  --bg: #0b0e13;
-  --panel: #131820;
-  --panel-2: #1a212c;
-  --line: #262f3d;
-  --text: #e6ebf2;
-  --text-dim: #8b95a5;
-  --accent-a: #3fb8ff;
+
+  /* Surfaces, darkest to lightest. */
+  --bg: #07090c;
+  --panel: #10141a;
+  --panel-hi: #151a22;
+  --panel-2: #1a2029;
+  --lcd: #080b0f;
+  --line: #222a36;
+  --line-hi: #2e3848;
+
+  --text: #e8ecf2;
+  --text-dim: #8a94a4;
+  --text-faint: #5d6778;
+
+  --accent-a: #36b3ff;
   --accent-b: #ff8a3d;
   --good: #3ddc97;
   --warn: #f5c542;
   --bad: #ff5d5d;
-  --btn: #202938;
-  --btn-hover: #283346;
-  --btn-on: #3ddc97;
-  --radius: 6px;
 
-  --wave-bg: #0d1117;
+  --btn-top: #242c39;
+  --btn-bottom: #1b222c;
+  --btn-hover-top: #2b3544;
+  --btn-hover-bottom: #212935;
+  --btn-on: #3ddc97;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-btn: 0 1px 0 rgba(255, 255, 255, 0.07) inset, 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-lcd: 0 1px 3px rgba(0, 0, 0, 0.9) inset, 0 1px 0 rgba(255, 255, 255, 0.04);
+
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+  --font-num: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  --wave-bg: #06080b;
   --wave-low: #2f6fdf;
   --wave-mid: #e39b2d;
   --wave-high: #e8edf5;
-  --wave-played: rgba(0, 0, 0, 0.45);
+  --wave-played: rgba(0, 0, 0, 0.5);
   --wave-playhead: #ff4d4f;
-  --wave-beat: rgba(255, 255, 255, 0.16);
-  --wave-bar: rgba(255, 255, 255, 0.42);
+  --wave-beat: rgba(255, 255, 255, 0.35);
+  --wave-bar: rgba(255, 255, 255, 0.8);
   --wave-cue: #f5c542;
-  --wave-hotcue: #3ddc97;
   --wave-loop: rgba(61, 220, 151, 0.16);
 
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* One colour per hot cue, shared by pads and waveform markers. */
+  --hotcue-1: #ff4d6d;
+  --hotcue-2: #ff9f1c;
+  --hotcue-3: #ffd60a;
+  --hotcue-4: #3ddc97;
+  --hotcue-5: #2ec4f1;
+  --hotcue-6: #4d7cff;
+  --hotcue-7: #b37dff;
+  --hotcue-8: #ff6fd8;
+
+  /* Icons, drawn with mask-image so they take the text colour. */
+  --icon-play: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 2.5v11l9-5.5z'/%3E%3C/svg%3E");
+  --icon-pause: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z'/%3E%3C/svg%3E");
+  --icon-headphones: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 2a6 6 0 0 0-6 6v4.5A1.5 1.5 0 0 0 3.5 14H5V9H3.5V8a4.5 4.5 0 0 1 9 0v1H11v5h1.5a1.5 1.5 0 0 0 1.5-1.5V8a6 6 0 0 0-6-6z'/%3E%3C/svg%3E");
+  --icon-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238a94a4' stroke-width='1.6'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E");
+
+  font-family: var(--font-ui);
   font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -51,14 +93,17 @@ body {
 
 body {
   min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 50% -200px, rgba(54, 179, 255, 0.06), transparent 70%),
+    var(--bg);
 }
 
 #app {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 12px 16px;
-  max-width: 1600px;
+  gap: 10px;
+  padding: 10px 14px 18px;
+  max-width: 1680px;
   margin: 0 auto;
 }
 
@@ -73,30 +118,55 @@ body {
   color: var(--bad);
 }
 
+/* ---- panels ----------------------------------------------------------- */
+
+.deck,
+.mixer,
+.library,
+.waves {
+  background: linear-gradient(180deg, var(--panel-hi), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+}
+
 /* ---- buttons ---------------------------------------------------------- */
 
 .btn {
   appearance: none;
-  border: 1px solid var(--line);
-  background: var(--btn);
-  color: var(--text);
-  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line-hi);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bottom));
+  color: #d7dde7;
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
   font: inherit;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  box-shadow: var(--shadow-btn);
   cursor: pointer;
   user-select: none;
   touch-action: manipulation;
-  transition: background-color 80ms, border-color 80ms, color 80ms;
+  transition:
+    background 90ms,
+    border-color 90ms,
+    color 90ms,
+    box-shadow 90ms;
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--btn-hover);
+  background: linear-gradient(180deg, var(--btn-hover-top), var(--btn-hover-bottom));
+  border-color: #3a4658;
+  color: var(--text);
 }
 
 .btn:active:not(:disabled) {
   transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) inset;
 }
 
 .btn:focus-visible,
@@ -109,19 +179,30 @@ th.sortable:focus-visible {
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.38;
   cursor: not-allowed;
 }
 
+/* "On" is an LED: lit colour plus a soft glow, readable from across a room. */
 .btn.on {
-  background: var(--btn-on);
-  border-color: var(--btn-on);
-  color: #06140d;
+  background: linear-gradient(180deg, #52e8a7, #2fc585);
+  border-color: #6ff0b8;
+  color: #04160d;
+  box-shadow:
+    0 0 14px rgba(61, 220, 151, 0.35),
+    0 1px 0 rgba(255, 255, 255, 0.35) inset;
 }
 
 .btn-small {
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: 11.5px;
+}
+
+.btn-tiny {
+  padding: 1px 7px;
+  font-size: 11px;
+  line-height: 1.5;
+  border-radius: 4px;
 }
 
 /* Every press acknowledges itself, whether it came from mouse, keyboard or MIDI. */
@@ -145,31 +226,38 @@ th.sortable:focus-visible {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
+  padding: 2px 2px 0;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   font-weight: 800;
-  font-size: 18px;
-  letter-spacing: 0.08em;
+  font-size: 19px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .brand-mark {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  border: 2px solid var(--good);
-  background: radial-gradient(circle, var(--good) 0 3px, transparent 4px);
+  background:
+    radial-gradient(circle, var(--bg) 0 3px, transparent 3.5px),
+    conic-gradient(from 200deg, var(--accent-a), var(--good), var(--accent-b), var(--accent-a));
+  box-shadow: 0 0 12px rgba(54, 179, 255, 0.35);
 }
 
 .pill {
-  border: 1px solid var(--warn);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(245, 197, 66, 0.55);
   color: var(--warn);
-  background: transparent;
+  background: rgba(245, 197, 66, 0.08);
   border-radius: 999px;
   padding: 4px 12px;
   font: inherit;
@@ -177,10 +265,25 @@ th.sortable:focus-visible {
   cursor: pointer;
 }
 
+.pill::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
 .pill.is-on {
   border-color: var(--line);
+  background: transparent;
   color: var(--text-dim);
   cursor: default;
+}
+
+.pill.is-on::before {
+  background: var(--good);
+  box-shadow: 0 0 8px var(--good);
 }
 
 .topbar-right {
@@ -202,48 +305,135 @@ th.sortable:focus-visible {
 .error-banner {
   display: none;
   border: 1px solid var(--bad);
-  background: rgba(255, 93, 93, 0.12);
-  color: var(--bad);
+  background: rgba(255, 93, 93, 0.1);
+  color: #ffc2c2;
   border-radius: var(--radius);
   padding: 8px 12px;
+  font-size: 13px;
 }
 
 .error-banner.visible {
-  display: block;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 /* ---- scrolling waveforms --------------------------------------------- */
 
 .waves {
+  position: relative;
   display: flex;
   flex-direction: column;
+  gap: 0;
+  padding: 6px;
+  background: var(--wave-bg);
+}
+
+.zoom-tools {
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
   gap: 4px;
+  background: rgba(7, 9, 12, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 5px;
+  backdrop-filter: blur(4px);
+}
+
+.zoom-label {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 2.8rem;
+  text-align: center;
+}
+
+.phase-meter {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr) auto 5rem;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.phase-canvas {
+  display: block;
+  width: 100%;
+  height: 14px;
+}
+
+.phase-label {
+  min-width: 10rem;
+  text-align: center;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.phase-meter.locked .phase-label {
+  color: var(--good);
+  text-shadow: 0 0 10px rgba(61, 220, 151, 0.45);
+}
+
+.phase-bar-a {
+  color: var(--accent-a);
+}
+
+.phase-bar-b {
+  color: var(--accent-b);
+  text-align: right;
 }
 
 .wave-row {
   position: relative;
-  border-radius: var(--radius);
   overflow: hidden;
-  border-left: 4px solid var(--accent-a);
+  border-left: 3px solid var(--accent-a);
+}
+
+.wave-row-a {
+  border-radius: 5px 5px 0 0;
 }
 
 .wave-row-b {
   border-left-color: var(--accent-b);
+  border-radius: 0 0 5px 5px;
 }
 
 .wave {
   display: block;
   width: 100%;
-  height: 88px;
+  height: 92px;
 }
 
 .wave-label {
   position: absolute;
-  left: 6px;
-  bottom: 4px;
+  left: 8px;
+  bottom: 6px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 12px;
   font-weight: 800;
-  color: var(--text-dim);
+  color: #07090c;
+  background: var(--accent-a);
   pointer-events: none;
+}
+
+.wave-row-b .wave-label {
+  background: var(--accent-b);
 }
 
 /* ---- console layout -------------------------------------------------- */
@@ -251,55 +441,65 @@ th.sortable:focus-visible {
 .console {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 8px;
+  gap: 10px;
   align-items: stretch;
-}
-
-@media (max-width: 1100px) {
-  .console {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .mixer {
-    order: 3;
-  }
 }
 
 /* ---- deck ------------------------------------------------------------- */
 
 .deck {
   --accent: var(--accent-a);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-top: 3px solid var(--accent);
-  border-radius: var(--radius);
-  padding: 10px;
+  --accent-glow: rgba(54, 179, 255, 0.4);
+  position: relative;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
+  overflow: hidden;
+}
+
+/* Accent rule along the top edge, like a deck's colour strip. */
+.deck::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), transparent 85%);
 }
 
 .deck-b {
   --accent: var(--accent-b);
+  --accent-glow: rgba(255, 138, 61, 0.4);
+}
+
+.deck-b::before {
+  background: linear-gradient(270deg, var(--accent), transparent 85%);
 }
 
 .deck.drop-target {
   outline: 2px dashed var(--accent);
-  outline-offset: -4px;
+  outline-offset: -5px;
 }
 
 .deck-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .deck-id {
-  font-size: 26px;
-  font-weight: 800;
-  color: var(--accent);
-  width: 28px;
-  text-align: center;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 7px;
+  font-size: 19px;
+  font-weight: 850;
+  color: #07090c;
+  background: var(--accent);
+  box-shadow: 0 0 16px var(--accent-glow);
 }
 
 .track-info {
@@ -309,7 +509,7 @@ th.sortable:focus-visible {
 
 .track-title {
   font-weight: 700;
-  font-size: 15px;
+  font-size: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -317,36 +517,63 @@ th.sortable:focus-visible {
 
 .track-artist {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 12.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-height: 1.2em;
 }
 
+/* BPM as an LCD readout. */
 .bpm {
   text-align: right;
+  background: var(--lcd);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow-lcd);
+  padding: 4px 8px 5px;
+  min-width: 118px;
 }
 
 .bpm-value {
-  font-size: 24px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
+  font-family: var(--font-num);
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
 
 .bpm-label {
-  color: var(--text-dim);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.bpm-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.bpm-tools .btn-tiny {
+  padding: 0 6px;
+  font-size: 10.5px;
+  box-shadow: none;
 }
 
 .deck-status {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-dim);
-  background: var(--panel-2);
-  border-radius: 4px;
-  padding: 4px 8px;
-  min-height: 24px;
+  background: var(--lcd);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lcd);
+  border-radius: 5px;
+  padding: 5px 9px;
+  min-height: 28px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -370,7 +597,7 @@ th.sortable:focus-visible {
   display: inline-block;
   width: 9px;
   height: 9px;
-  margin-right: 6px;
+  margin-right: 7px;
   border: 2px solid var(--text-dim);
   border-top-color: transparent;
   border-radius: 50%;
@@ -387,49 +614,126 @@ th.sortable:focus-visible {
 .overview {
   display: block;
   width: 100%;
-  height: 56px;
-  border-radius: 4px;
+  height: 60px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
   cursor: pointer;
+  touch-action: pan-y;
 }
 
 .time-row {
   display: flex;
   justify-content: space-between;
-  font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  align-items: baseline;
+  font-family: var(--font-num);
+  font-size: 14px;
+  padding: 0 2px;
+}
+
+.time-elapsed {
+  color: var(--text);
+}
+
+.time-remaining {
+  color: var(--text-dim);
 }
 
 .tempo-readout {
   color: var(--text-dim);
+  font-size: 12.5px;
 }
 
+/* Fills the deck's height, so the transport lines up with the crossfader and
+   the tempo fader gets the full travel. */
 .deck-body {
+  flex: 1;
   display: flex;
-  gap: 10px;
+  gap: 12px;
+  min-height: 0;
 }
 
 .deck-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
 .pads {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 5px;
+  /* Pads take the height the mixer column leaves free (bigger targets
+     mid-mix), capped so they never look like tiles. */
+  grid-auto-rows: minmax(44px, 72px);
+  flex: 1 1 auto;
+  max-height: 150px;
+  gap: 6px;
 }
 
 .pad {
-  padding: 10px 0;
+  --pad-colour: var(--text-dim);
+  position: relative;
+  height: auto;
+  padding: 0;
+  font-family: var(--font-num);
+  font-size: 15px;
+  color: var(--text-faint);
+  background: linear-gradient(180deg, #1c232e, #151b23);
 }
 
+/* A set pad shows its colour as a lit strip and a tinted face. */
 .pad.set {
-  background: rgba(61, 220, 151, 0.18);
-  border-color: var(--good);
-  color: var(--good);
+  color: var(--pad-colour);
+  border-color: color-mix(in srgb, var(--pad-colour) 55%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--pad-colour) 22%, #1c232e), color-mix(in srgb, var(--pad-colour) 10%, #151b23));
+  box-shadow:
+    inset 0 -3px 0 var(--pad-colour),
+    0 0 12px color-mix(in srgb, var(--pad-colour) 22%, transparent);
+}
+
+.pad.held {
+  color: #07090c;
+  background: var(--pad-colour);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--pad-colour) 60%, transparent);
+}
+
+/* Track-end warning: remaining time and deck border pulse red. */
+.time-remaining.ending {
+  color: var(--bad);
+  font-weight: 700;
+  animation: ending 800ms steps(2, jump-none) infinite;
+}
+
+.deck.ending {
+  border-color: var(--bad);
+  box-shadow:
+    var(--shadow-panel),
+    0 0 0 1px rgba(255, 93, 93, 0.4);
+}
+
+@keyframes ending {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.limit-led {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 7px;
+  background: var(--lcd);
+}
+
+.limit-led.on {
+  color: #fff;
+  background: var(--bad);
+  border-color: #ff8a8a;
+  box-shadow: 0 0 12px rgba(255, 93, 93, 0.6);
 }
 
 .loop-row {
@@ -440,74 +744,197 @@ th.sortable:focus-visible {
 .loop-row .btn {
   flex: 1;
   min-width: 0;
+  padding: 6px 4px;
 }
 
 .btn.selected:not(.on) {
-  border-color: var(--good);
+  border-color: rgba(61, 220, 151, 0.6);
+  color: var(--good);
 }
 
 .transport {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  gap: 8px;
   margin-top: auto;
+  padding-top: 4px;
 }
 
 .btn-play,
 .btn-cue {
-  padding: 14px 0;
-  font-size: 15px;
+  height: 58px;
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  border-radius: 7px;
+}
+
+.btn-play::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: var(--icon-play) center / contain no-repeat;
+}
+
+.btn-play.on::before {
+  mask-image: var(--icon-pause);
+}
+
+.btn-play.on {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 85%, #fff), var(--accent));
+  border-color: color-mix(in srgb, var(--accent) 70%, #fff);
+  color: #07090c;
+  box-shadow:
+    0 0 20px var(--accent-glow),
+    0 1px 0 rgba(255, 255, 255, 0.4) inset;
 }
 
 .btn-cue {
   color: var(--warn);
-  border-color: rgba(245, 197, 66, 0.4);
+  border-color: rgba(245, 197, 66, 0.45);
 }
 
-.btn-play.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #0b0e13;
+.btn-cue.on {
+  background: linear-gradient(180deg, #ffd96b, var(--warn));
+  border-color: #ffe39a;
+  color: #1a1400;
+  box-shadow: 0 0 18px rgba(245, 197, 66, 0.45);
 }
 
 .tempo-section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   width: 92px;
 }
 
 .tempo-small-row {
   display: flex;
-  gap: 4px;
+  gap: 5px;
 }
 
 .btn-sync {
   width: 100%;
+  height: 40px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+/* ---- faders ------------------------------------------------------------ */
+
+/* Hardware-style faders: a dark groove and a ribbed cap. Scale marks are
+   painted on the input's own background, so no extra markup is needed. */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, #030406, #0b0e13, #030406);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+input[type='range']::-moz-range-track {
+  background: #05070a;
+  border-radius: 4px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid #07090c;
+  border-radius: 4px;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.7),
+    0 1px 0 rgba(255, 255, 255, 0.35) inset;
+}
+
+input[type='range']::-moz-range-thumb {
+  border: 1px solid #07090c;
+  border-radius: 4px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.7);
+}
+
+/* Vertical faders: the tempo fader (minus at the top) and channel faders. */
+.tempo-fader,
+.channel-fader {
+  writing-mode: vertical-lr;
+  --cap: linear-gradient(180deg, #2a3240 0 40%, var(--accent) 40% 60%, #2a3240 60%);
 }
 
 .tempo-fader {
-  writing-mode: vertical-lr;
-  width: 36px;
-  flex: 1;
-  min-height: 140px;
-  accent-color: var(--accent);
+  width: 44px;
+  /* Zero basis: a restyled vertical range reports a huge intrinsic height, and
+     letting it drive layout stretched the whole console off-screen. It fills
+     the space the other controls leave instead. */
+  flex: 1 1 0;
+  height: 0;
+  min-height: 150px;
+  /* Centre detent, then +/- tick marks down both sides. */
+  background:
+    linear-gradient(180deg, transparent calc(50% - 1px), var(--text-dim) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) center / 100% 100% no-repeat,
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 10%) left / 7px 100% no-repeat,
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 10%) right / 7px 100% no-repeat;
+}
+
+.channel-fader {
+  direction: rtl;
+  width: 38px;
+  height: auto;
+  min-height: 0;
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 12.5%) left / 6px 100% no-repeat,
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 12.5%) right / 6px 100% no-repeat;
+}
+
+.channel-a .channel-fader {
+  --accent: var(--accent-a);
+}
+
+.channel-b .channel-fader {
+  --accent: var(--accent-b);
+}
+
+.tempo-fader::-webkit-slider-runnable-track,
+.channel-fader::-webkit-slider-runnable-track {
+  width: 6px;
+}
+
+.tempo-fader::-webkit-slider-thumb,
+.channel-fader::-webkit-slider-thumb {
+  width: 34px;
+  height: 18px;
+  margin-left: -14px;
+  background: var(--cap);
+}
+
+.tempo-fader::-moz-range-thumb,
+.channel-fader::-moz-range-thumb {
+  width: 34px;
+  height: 18px;
+  background: var(--cap);
 }
 
 /* ---- mixer ------------------------------------------------------------ */
 
 .mixer {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .mixer-strips {
+  flex: 1;
   display: flex;
   gap: 10px;
   justify-content: center;
@@ -527,18 +954,26 @@ th.sortable:focus-visible {
 
 .master-strip {
   width: 120px;
+  padding: 0 8px;
   border-left: 1px solid var(--line);
   border-right: 1px solid var(--line);
-  padding: 0 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent);
 }
 
 .channel-id {
-  font-weight: 800;
-  color: var(--accent-a);
+  width: 24px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 850;
+  color: #07090c;
+  background: var(--accent-a);
 }
 
 .channel-b .channel-id {
-  color: var(--accent-b);
+  background: var(--accent-b);
 }
 
 .eq-row {
@@ -548,57 +983,66 @@ th.sortable:focus-visible {
 }
 
 .btn-kill {
-  padding: 3px 4px;
-  font-size: 9px;
+  padding: 3px 5px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  box-shadow: none;
 }
 
 .btn-kill.on {
-  background: var(--bad);
-  border-color: var(--bad);
+  background: linear-gradient(180deg, #ff7b7b, var(--bad));
+  border-color: #ff9d9d;
   color: #fff;
+  box-shadow: 0 0 12px rgba(255, 93, 93, 0.5);
 }
 
 .btn-headphone {
   width: 100%;
-  padding: 5px 0;
-  font-size: 12px;
+  padding: 6px 0;
+  font-size: 11.5px;
+}
+
+.btn-headphone::before {
+  content: '';
+  width: 13px;
+  height: 13px;
+  background: currentColor;
+  mask: var(--icon-headphones) center / contain no-repeat;
 }
 
 .btn-headphone.on.inactive {
   background: transparent;
   color: var(--btn-on);
   border-style: dashed;
+  box-shadow: none;
 }
 
 .fader-meter {
+  flex: 1 1 0;
   display: flex;
   gap: 8px;
   align-items: stretch;
-  height: 150px;
+  min-height: 160px;
 }
 
-.channel-fader {
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 32px;
-  height: 100%;
-}
-
-.channel-a .channel-fader {
-  accent-color: var(--accent-a);
-}
-
-.channel-b .channel-fader {
-  accent-color: var(--accent-b);
-}
-
+/* Segmented LED meter: the gradient is fixed and revealed by clip-path. */
 .meter {
   position: relative;
   width: 10px;
   height: 100%;
-  background: #080a0e;
+  background: var(--lcd);
+  border: 1px solid #000;
   border-radius: 2px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
   overflow: hidden;
+}
+
+.meter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, var(--lcd) 3px 4px);
+  pointer-events: none;
 }
 
 .meter-fill {
@@ -606,6 +1050,7 @@ th.sortable:focus-visible {
   inset: 0;
   clip-path: inset(100% 0 0 0);
   background: linear-gradient(to top, var(--good) 0 65%, var(--warn) 65% 88%, var(--bad) 88%);
+  box-shadow: 0 0 8px rgba(61, 220, 151, 0.4);
 }
 
 .meter-hold {
@@ -614,31 +1059,34 @@ th.sortable:focus-visible {
   right: 0;
   height: 2px;
   bottom: 0;
-  background: var(--text);
+  background: #fff;
+  z-index: 1;
 }
 
 .meter.clip {
-  box-shadow: 0 0 0 1px var(--bad);
+  box-shadow: 0 0 0 1px var(--bad), 0 0 10px rgba(255, 93, 93, 0.6);
 }
 
 .master-meter {
-  height: 120px;
+  height: 130px;
   display: flex;
+  gap: 3px;
 }
 
 .cue-mode {
   width: 100%;
-  background: var(--btn);
+  background: var(--lcd);
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 3px;
+  border: 1px solid var(--line-hi);
+  border-radius: 5px;
+  padding: 4px;
+  font: inherit;
   font-size: 11px;
 }
 
 .cue-hint {
   color: var(--warn);
-  font-size: 10px;
+  font-size: 10.5px;
   text-align: center;
   min-height: 1.2em;
 }
@@ -646,21 +1094,51 @@ th.sortable:focus-visible {
 .xfader-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 8px 8px 2px;
+  border-top: 1px solid var(--line);
 }
 
 .xfader-label {
-  font-weight: 800;
-  color: var(--accent-a);
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 850;
+  color: #07090c;
+  background: var(--accent-a);
 }
 
 .xfader-label:last-child {
-  color: var(--accent-b);
+  background: var(--accent-b);
 }
 
 .crossfader {
   flex: 1;
-  accent-color: var(--text);
+  height: 40px;
+  background:
+    linear-gradient(90deg, transparent calc(50% - 1px), var(--text-dim) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) center / 100% 100% no-repeat,
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 10%) top / 100% 6px no-repeat,
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 10%) bottom / 100% 6px no-repeat;
+}
+
+.crossfader::-webkit-slider-runnable-track {
+  height: 7px;
+}
+
+.crossfader::-webkit-slider-thumb {
+  width: 22px;
+  height: 34px;
+  margin-top: -14px;
+  background: linear-gradient(90deg, #2a3240 0 40%, #e8ecf2 40% 60%, #2a3240 60%);
+}
+
+.crossfader::-moz-range-thumb {
+  width: 22px;
+  height: 34px;
+  background: linear-gradient(90deg, #2a3240 0 40%, #e8ecf2 40% 60%, #2a3240 60%);
 }
 
 .xfader-options {
@@ -678,8 +1156,9 @@ th.sortable:focus-visible {
 }
 
 .knob-label {
-  font-size: 9px;
-  letter-spacing: 0.08em;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   color: var(--text-dim);
 }
 
@@ -695,11 +1174,12 @@ th.sortable:focus-visible {
   width: 100%;
   height: 100%;
   display: block;
+  overflow: visible;
 }
 
 .knob-track {
   fill: none;
-  stroke: var(--line);
+  stroke: #0a0d12;
   stroke-width: 3.5;
   stroke-linecap: round;
 }
@@ -709,16 +1189,18 @@ th.sortable:focus-visible {
   stroke: var(--good);
   stroke-width: 3.5;
   stroke-linecap: round;
+  filter: drop-shadow(0 0 2px rgba(61, 220, 151, 0.6));
 }
 
 .knob-cap {
-  fill: var(--panel-2);
+  fill: #232b37;
   stroke: #3a4556;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.6));
 }
 
 .knob-pointer {
-  stroke: var(--text);
-  stroke-width: 2;
+  stroke: #f2f5f9;
+  stroke-width: 2.2;
   stroke-linecap: round;
 }
 
@@ -727,27 +1209,24 @@ th.sortable:focus-visible {
 }
 
 .knob-readout {
-  font-size: 10px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
   color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 /* ---- library ---------------------------------------------------------- */
 
 .library {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .library-toolbar {
   display: flex;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -755,12 +1234,18 @@ th.sortable:focus-visible {
 .library-search {
   flex: 1;
   min-width: 12rem;
-  background: var(--bg);
+  background: var(--lcd) var(--icon-search) 10px center / 15px no-repeat;
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 6px 8px;
+  border: 1px solid var(--line-hi);
+  box-shadow: var(--shadow-lcd);
+  border-radius: 6px;
+  padding: 7px 10px 7px 32px;
   font: inherit;
+  font-size: 13px;
+}
+
+.library-search::placeholder {
+  color: var(--text-faint);
 }
 
 .library-status {
@@ -769,97 +1254,153 @@ th.sortable:focus-visible {
 }
 
 .library-table-wrap {
-  max-height: 360px;
+  max-height: 380px;
   overflow: auto;
-  border-radius: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--lcd);
 }
 
 .library-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  /* Fixed layout so a long title cannot push the Load buttons off-screen. */
+  table-layout: fixed;
+}
+
+.library-table .col-title {
+  width: 45%;
+  color: var(--text);
+  font-weight: 550;
 }
 
 .library-table th {
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--panel-2);
   text-align: left;
-  font-weight: 600;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--text-dim);
-  padding: 6px 8px;
+  padding: 8px 10px;
   white-space: nowrap;
+  border-bottom: 1px solid var(--line-hi);
 }
 
 .library-table th.sortable {
   cursor: pointer;
 }
 
+.library-table th.sortable:hover {
+  color: var(--text);
+}
+
 .library-table th.sorted {
   color: var(--text);
 }
 
+.library-table th[aria-sort='ascending']::after {
+  content: ' \25B2';
+  font-size: 8px;
+}
+
+.library-table th[aria-sort='descending']::after {
+  content: ' \25BC';
+  font-size: 8px;
+}
+
 .library-table td {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(34, 42, 54, 0.6);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 24rem;
 }
 
+.library-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
+}
+
 .library-table tbody tr:hover {
-  background: var(--panel-2);
+  background: rgba(54, 179, 255, 0.07);
 }
 
 .library-table tbody tr[draggable='true'] {
   cursor: grab;
 }
 
+.library-table .col-artist {
+  color: var(--text-dim);
+}
+
 .library-table .col-num {
   text-align: right;
-  font-variant-numeric: tabular-nums;
-  width: 5rem;
+  font-family: var(--font-num);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  width: 5.5rem;
 }
 
 .library-table .col-load {
-  width: 5.5rem;
+  width: 6rem;
   text-align: right;
 }
 
 .btn-load {
-  padding: 2px 8px;
+  width: 26px;
+  padding: 2px 0;
   font-size: 11px;
-  margin-left: 3px;
+  font-weight: 800;
+  margin-left: 4px;
+  box-shadow: none;
 }
 
 .btn-load-a {
   color: var(--accent-a);
+  border-color: rgba(54, 179, 255, 0.35);
+}
+
+.btn-load-a:hover:not(:disabled) {
+  background: var(--accent-a);
+  color: #07090c;
 }
 
 .btn-load-b {
   color: var(--accent-b);
+  border-color: rgba(255, 138, 61, 0.35);
+}
+
+.btn-load-b:hover:not(:disabled) {
+  background: var(--accent-b);
+  color: #07090c;
 }
 
 .empty-row td {
   color: var(--text-dim);
   text-align: center;
-  padding: 18px;
+  padding: 22px;
 }
 
 /* ---- help ------------------------------------------------------------- */
 
 .help {
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--panel-hi), var(--panel));
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px 20px;
-  max-width: min(760px, calc(100vw - 32px));
+  border: 1px solid var(--line-hi);
+  border-radius: 12px;
+  padding: 18px 22px;
+  max-width: min(820px, calc(100vw - 32px));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
 }
 
 .help::backdrop {
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(3, 4, 6, 0.7);
+  backdrop-filter: blur(3px);
 }
 
 .help-head {
@@ -875,48 +1416,170 @@ th.sortable:focus-visible {
 
 .help-body {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 18px;
 }
 
 .help-group h3 {
-  font-size: 13px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--text-dim);
-  margin: 12px 0 6px;
+  margin: 14px 0 8px;
 }
 
 .help dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 10px;
+  gap: 5px 10px;
   margin: 0;
   font-size: 13px;
 }
 
 .help dd {
   margin: 0;
+  color: #cfd6e0;
 }
 
 kbd {
-  background: var(--btn);
-  border: 1px solid var(--line);
+  display: inline-block;
+  min-width: 22px;
+  text-align: center;
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bottom));
+  border: 1px solid var(--line-hi);
   border-bottom-width: 2px;
   border-radius: 4px;
   padding: 1px 6px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-num);
   font-size: 12px;
 }
 
 .help-foot {
   color: var(--text-dim);
   font-size: 12px;
-  margin: 14px 0 0;
+  margin: 16px 0 0;
+  line-height: 1.5;
+}
+
+/* ---- responsive ------------------------------------------------------- */
+
+/* Tablet landscape: keep decks and mixer side by side (stacking them put the
+   crossfader 1700 px down the page at 1024x768), just tighter. */
+@media (max-width: 1180px) {
+  #app {
+    padding: 6px 8px 12px;
+    gap: 8px;
+  }
+  .console {
+    gap: 6px;
+  }
+  .deck,
+  .mixer {
+    padding: 8px;
+  }
+  .tempo-section {
+    width: 64px;
+  }
+  .channel-strip {
+    width: 78px;
+  }
+  .master-strip {
+    width: 96px;
+    padding: 0 4px;
+  }
+  .knob {
+    width: 48px;
+    position: relative;
+  }
+  .knob-dial {
+    width: 36px;
+    height: 36px;
+  }
+  .wave {
+    height: 60px;
+  }
+  .fader-meter {
+    min-height: 110px;
+  }
+  .master-meter {
+    height: 90px;
+  }
+  .loop-row .btn {
+    font-size: 11px;
+    padding: 5px 2px;
+  }
+  .pads {
+    grid-auto-rows: minmax(36px, 52px);
+    max-height: 110px;
+  }
+  .btn-play,
+  .btn-cue {
+    height: 46px;
+  }
+  .bpm {
+    min-width: 100px;
+  }
+  .bpm-value {
+    font-size: 21px;
+  }
+  /* Knob values appear while the knob is touched, hovered or focused, as an
+     overlay: five always-on readouts pushed the crossfader off a 768 px screen. */
+  .knob-readout {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0 4px;
+    visibility: hidden;
+  }
+  .knob:hover .knob-readout,
+  .knob.dragging .knob-readout,
+  .knob:focus-within .knob-readout {
+    visibility: visible;
+  }
+}
+
+/* Narrow: one column in DOM order, so the mixer sits between the decks. */
+@media (max-width: 900px) {
+  .console {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .library-table .col-artist,
+  .library-table th.col-artist,
+  .library-table td:nth-child(4),
+  .library-table th:nth-child(4) {
+    display: none;
+  }
+  .library-table .col-title {
+    width: auto;
+  }
+  .phase-meter {
+    grid-template-columns: 3.5rem minmax(0, 1fr) 3.5rem;
+  }
+  .phase-label {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flash,
+  /* Press feedback must survive reduced motion: a static highlight instead of
+     the animation (flash() removes the class after a moment). */
+  .flash {
+    animation: none;
+    outline: 2px solid var(--text);
+    outline-offset: 1px;
+  }
   .deck-status.is-busy::before,
-  .library-status.is-busy::before {
+  .library-status.is-busy::before,
+  .time-remaining.ending {
     animation-duration: 1ms;
   }
 }
