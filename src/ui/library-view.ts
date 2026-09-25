@@ -277,6 +277,12 @@ export class LibraryView {
     this.select(this.visible[next].id);
   }
 
+  /** The tracks on screen from the selected row on (all of them without a selection), for Auto DJ. */
+  queueFromHere(): LibraryEntry[] {
+    const index = this.visible.findIndex((e) => e.id === this.selectedId);
+    return index < 0 ? this.visible.slice() : this.visible.slice(index);
+  }
+
   /** Load the selected row onto `deck`, or onto a free deck when null. */
   loadSelected(deck: 'A' | 'B' | null): void {
     const entry = this.visible.find((e) => e.id === this.selectedId);

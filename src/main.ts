@@ -21,6 +21,7 @@ import { toPcm16, wavHeader } from './audio/wav';
 import { renderDemo } from './demo/demo-tracks';
 import { AudioEngine } from './audio/engine';
 import { defaultMixer, type MixerState } from './audio/mixer';
+import { AutoDj } from './audio/auto-dj';
 import { SyncCoordinator } from './audio/sync-coordinator';
 import { DEMO_TRACKS } from './demo/demo-tracks';
 import { Actions } from './input/actions';
@@ -289,6 +290,14 @@ async function boot(): Promise<void> {
     }
   };
 
+  const autoDj = new AutoDj(decks, loader, sync, mixer);
+  const autoButton = h('button', { class: 'btn btn-small btn-autodj', text: 'Auto DJ', title: 'Play the tracks on screen from the selected one, with synced crossfades', attrs: { type: 'button' } });
+  const autoStatus = h('span', { class: 'library-status autodj-status', attrs: { role: 'status' } });
+  autoDj.store.subscribe((s) => {
+    setClass(autoButton, 'on', s.running);
+    setText(autoButton, s.running ? 'Stop Auto DJ' : 'Auto DJ');
+    setText(autoStatus, s.status);
+  });
   const crates = new Crates();
   void crates.load();
   const history = new PlayHistory();
@@ -314,7 +323,7 @@ async function boot(): Promise<void> {
     'Library',
     () =>
       new LibraryView(library, {
-        tools: [analyseButton, analyseStatus, historyDialog.button],
+        tools: [analyseButton, analyseStatus, historyDialog.button, autoButton, autoStatus],
         reference: () => {
           const deck = onAir();
           return deck ? { deck: deck.id, bpm: deck.effectiveBpm, key: deck.state.key } : null;
@@ -334,6 +343,8 @@ async function boot(): Promise<void> {
   const console_ = h('main', { class: 'console' }, [deckViews[0]?.el ?? null, mixerView?.el ?? null, deckViews[1]?.el ?? null]);
   if (libraryView) libraryView.el.insertBefore(listenBar, libraryView.el.children[1] ?? null);
   app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el, historyDialog.el, learnDialog.el);
+
+  autoButton.addEventListener('click', () => autoDj.toggle(() => libraryView?.queueFromHere() ?? []));
 
   // The Match filter and key highlights follow the deck on air; played rows dim.
   for (const deck of decks) deck.store.subscribe((s, p) => (s.playing !== p.playing || s.tempo !== p.tempo || s.key !== p.key || s.bpm !== p.bpm) && libraryView?.refresh());
@@ -462,7 +473,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi, crates } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi, crates, autoDj } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

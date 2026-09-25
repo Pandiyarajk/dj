@@ -1462,6 +1462,12 @@ input[type='range']::-moz-range-thumb {
   flex-wrap: wrap;
 }
 
+.btn-autodj.on {
+  background: linear-gradient(180deg, #6cc8ff, var(--accent-a));
+  border-color: #8ad4ff;
+  color: #07090c;
+}
+
 .crate-toolbar {
   padding-top: 0;
 }

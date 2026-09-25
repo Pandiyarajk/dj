@@ -735,6 +735,25 @@ try {
   await evaluate(`${deckExpr(0)}.pause()`);
   check('MIDI: 14-bit tempo, jog search, scratch, shifted pad clear', Math.abs(midiTempo - 0.04) < 0.0002 && Math.abs(searched - 0.1) < 0.01 && scratchRate < -0.5 && Math.abs(afterScratch - (1 + midiTempo)) < 1e-9 && typeof padSet === 'number' && padCleared === null, `tempo ${(midiTempo * 100).toFixed(3)}%, search +${searched.toFixed(3)} s, scratch rate ${scratchRate.toFixed(2)} -> ${afterScratch.toFixed(3)}`);
 
+  // Auto DJ: plays the tracks on screen with a synced crossfade.
+  await evaluate(`window.dj.decks.forEach((d) => d.pause())`);
+  await evaluate(`(() => { const s = document.querySelector('.library-search'); s.value = 'Bg'; s.dispatchEvent(new Event('input')); s.blur(); })()`);
+  await sleep(200);
+  await click('.library-toolbar', 'Auto DJ');
+  await waitFor(`${deckExpr(0)}.state.playing && ${deckExpr(0)}.state.track?.title === 'Hiphop 90' && ${deckExpr(1)}.loaded && ${deckExpr(1)}.state.track?.title === 'Mid 132' && ${deckExpr(1)}.state.analysis === null`, 20000, 'Auto DJ to start A and preload B').catch(async (error) => {
+    console.log('  autodj:', JSON.stringify(await evaluate(`({ status: document.querySelector('.autodj-status').textContent, a: [${deckExpr(0)}.state.track?.title, ${deckExpr(0)}.state.status, ${deckExpr(0)}.state.playing], b: [${deckExpr(1)}.state.track?.title, ${deckExpr(1)}.state.status, ${deckExpr(1)}.state.analysis], visible: ${visibleTitles} })`)));
+    throw error;
+  });
+  // Fast-forward near the end of A so the transition starts now.
+  await evaluate(`${deckExpr(0)}.seek(${deckExpr(0)}.duration - 7.5)`);
+  await waitFor(`/mixing into/.test(document.querySelector('.autodj-status').textContent)`, 5000, 'transition to start');
+  const mixing = await evaluate(`({ bPlaying: ${deckExpr(1)}.state.playing, bSynced: ${deckExpr(1)}.state.synced })`);
+  await waitFor(`/now playing/.test(document.querySelector('.autodj-status').textContent)`, 12000, 'transition to finish');
+  const handed = await evaluate(`({ a: ${deckExpr(0)}.state.playing, b: ${deckExpr(1)}.state.playing, x: window.dj.mixer.get().crossfader, status: document.querySelector('.autodj-status').textContent })`);
+  await click('.library-toolbar', 'Stop Auto DJ');
+  await evaluate(`window.dj.decks.forEach((d) => d.pause()); (() => { const s = document.querySelector('.library-search'); s.value = ''; s.dispatchEvent(new Event('input')); })()`);
+  check('Auto DJ syncs, crossfades into the next track and stops the old one', mixing.bPlaying && mixing.bSynced && !handed.a && handed.b && handed.x === 1 && /now playing "Mid 132"/.test(handed.status), `during: B playing ${mixing.bPlaying}, synced ${mixing.bSynced}; after: A ${handed.a}, B ${handed.b}, xfader ${handed.x}, "${handed.status}"`);
+
   // MIDI learn: map a new note to deck A's play, then use it.
   await click('.topbar-right', 'MIDI map');
   await evaluate(`document.querySelector('.learn-row[data-action="deck.A.play"] button').click()`);
