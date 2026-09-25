@@ -216,6 +216,22 @@ try {
   check('deck A playhead advances', posA > 0.5 && posA < 2, `${posA.toFixed(2)} s after 1.2 s`);
   check('audio reaches the master bus', peak > 0.05, `peak ${peak.toFixed(3)}`);
 
+  // Mix recording: about 3 s of the playing master, decoded back.
+  await evaluate('window.dj.recorder.start({ memory: true })');
+  const recLabel = await evaluate(`document.querySelector('.btn-rec').textContent`);
+  await sleep(3000);
+  await evaluate('window.dj.recorder.stop()');
+  const rec = await evaluate(`(async () => {
+    const blob = window.dj.recorder.lastBlob;
+    if (!blob) return null;
+    const audio = await window.dj.engine.ctx.decodeAudioData(await blob.arrayBuffer());
+    const data = audio.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+    return { seconds: audio.duration, rate: audio.sampleRate, channels: audio.numberOfChannels, rms: Math.sqrt(sum / data.length), status: window.dj.recorder.store.get().status };
+  })()`);
+  check('REC records the master to a WAV that decodes, with audio in it', rec !== null && /^REC /.test(recLabel) && Math.abs(rec.seconds - 3) < 0.4 && rec.channels === 2 && rec.rms > 0.01 && /Recorded 0:0[23]/.test(rec.status), rec ? `${rec.seconds.toFixed(2)} s, ${rec.channels} ch, rms ${rec.rms.toFixed(3)}, "${rec.status}"` : 'no blob');
+
   // (Needs the context running: suspended automation does not advance.)
   // The demo track's peak already sits at -1 dBFS, so its auto-gain is ~0 dB
   // (the ceiling blocks a boost): use a known -6 dB to prove the switch.

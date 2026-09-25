@@ -7,6 +7,8 @@
  * Modified: Sep-25-2026 (cue-bus limiter, gain-reduction reading, click-free re-route)
  */
 import deckProcessorUrl from './worklets/deck-processor.ts?worker&url';
+import recorderProcessorUrl from './worklets/recorder-processor.ts?worker&url';
+import { MixRecorder } from './recorder';
 import { ChannelStrip, type CueMode, type MixerState } from './mixer';
 import { crossfaderGains, faderGain } from './mixer-math';
 import type { Store } from '../state/store';
@@ -58,6 +60,18 @@ export class AudioEngine {
     this.cueBus.connect(cueLimiter).connect(this.cueFade);
   }
 
+  /**
+   * A recorder on the master bus, post-limiter and before the output routing
+   * fade, so re-routing the headphone cue never dips the recording.
+   */
+  createRecorder(): MixRecorder {
+    const node = new AudioWorkletNode(this.ctx, 'recorder-processor', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+    this.masterOut.connect(node);
+    // Pulled by the graph only if connected onward; its output is silence.
+    node.connect(this.ctx.destination);
+    return new MixRecorder(node, this.ctx.sampleRate);
+  }
+
   /** Master limiter gain reduction right now, dB (0 or negative). */
   get limiterReduction(): number {
     return this.limiter.reduction;
@@ -70,7 +84,7 @@ export class AudioEngine {
    */
   static async create(): Promise<AudioEngine> {
     const ctx = new AudioContext({ latencyHint: 'interactive' });
-    await ctx.audioWorklet.addModule(deckProcessorUrl);
+    await Promise.all([ctx.audioWorklet.addModule(deckProcessorUrl), ctx.audioWorklet.addModule(recorderProcessorUrl)]);
     return new AudioEngine(ctx);
   }
 

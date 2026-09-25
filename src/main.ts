@@ -15,6 +15,7 @@
  *   error banner, shortcuts blocked behind the help dialog)
  */
 import { DeckController } from './audio/deck-controller';
+import { formatDuration } from './audio/recorder';
 import { AudioEngine } from './audio/engine';
 import { defaultMixer, type MixerState } from './audio/mixer';
 import { SyncCoordinator } from './audio/sync-coordinator';
@@ -137,13 +138,22 @@ async function boot(): Promise<void> {
   });
   setText(midiStatus, MidiInput.supported() ? '' : 'No Web MIDI in this browser');
   midiButton.disabled = !MidiInput.supported();
+  const recorder = engine.createRecorder();
+  const recButton = h('button', { class: 'btn btn-small btn-rec', text: 'REC', title: 'Record the master output as a WAV file', attrs: { type: 'button' } });
+  recButton.addEventListener('click', () => recorder.toggle());
+  const recStatus = h('span', { class: 'rec-status', attrs: { role: 'status' } });
+  recorder.store.subscribe((s) => {
+    setClass(recButton, 'on', s.recording);
+    setText(recButton, s.recording ? `REC ${formatDuration(s.seconds)}` : 'REC');
+    setText(recStatus, s.recording ? `${(s.bytes / 1e6).toFixed(1)} MB` : s.status);
+  });
   const helpButton = h('button', { class: 'btn btn-small', text: 'Shortcuts (?)', attrs: { type: 'button' } });
   helpButton.addEventListener('click', () => help.toggle());
 
   const topbar = h('header', { class: 'topbar' }, [
     h('div', { class: 'brand' }, [h('span', { class: 'brand-mark' }), h('span', { text: 'dj' })]),
     audioPill,
-    h('div', { class: 'topbar-right' }, [midiStatus, midiButton, helpButton]),
+    h('div', { class: 'topbar-right' }, [recStatus, recButton, midiStatus, midiButton, helpButton]),
   ]);
 
   // Waveform zoom, shared by both decks so their beats line up on screen.
@@ -302,7 +312,7 @@ async function boot(): Promise<void> {
   });
   // Closing or reloading mid-set loses the decks: ask first while anything plays.
   window.addEventListener('beforeunload', (event) => {
-    if (decks.some((d) => d.state.playing)) event.preventDefault();
+    if (decks.some((d) => d.state.playing) || recorder.store.get().recording) event.preventDefault();
   });
   // Dropping a file outside a deck would navigate away from the app.
   window.addEventListener('dragover', (event) => event.preventDefault());
@@ -366,7 +376,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

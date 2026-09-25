@@ -294,6 +294,41 @@ th.sortable:focus-visible {
   gap: 8px;
 }
 
+.btn-rec {
+  gap: 7px;
+  font-family: var(--font-num);
+}
+
+.btn-rec::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+
+.btn-rec.on {
+  background: linear-gradient(180deg, #ff7b7b, var(--bad));
+  border-color: #ff9d9d;
+  color: #fff;
+  box-shadow: 0 0 14px rgba(255, 93, 93, 0.55);
+}
+
+.btn-rec.on::before {
+  background: #fff;
+  animation: ending 1s steps(2, jump-none) infinite;
+}
+
+.rec-status {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .midi-status {
   color: var(--text-dim);
   font-size: 12px;
