@@ -20,6 +20,8 @@ export interface LibraryViewHandlers {
   load: (entry: LibraryEntry, deck: 'A' | 'B') => void;
   /** Double-click: pick a deck automatically. */
   loadAuto: (entry: LibraryEntry) => void;
+  /** Extra toolbar controls (such as background analysis). */
+  tools?: HTMLElement[];
 }
 
 export class LibraryView {
@@ -104,7 +106,7 @@ export class LibraryView {
     ]);
 
     this.el = h('section', { class: 'library', attrs: { 'aria-label': 'Library' } }, [
-      h('div', { class: 'library-toolbar' }, [folder, this.reopen, files, this.search, this.status]),
+      h('div', { class: 'library-toolbar' }, [folder, this.reopen, files, ...(handlers.tools ?? []), this.search, this.status]),
       h('div', { class: 'library-table-wrap' }, [table]),
     ]);
 

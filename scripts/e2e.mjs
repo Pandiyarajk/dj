@@ -505,6 +505,32 @@ try {
   const restored2 = await evaluate(`({ a: window.dj.decks[0].state.track.title, b: window.dj.decks[1].state.track.title, pa: window.dj.decks[0].renderPosition(), pb: window.dj.decks[1].renderPosition(), x: window.dj.mixer.get().crossfader, banner: document.querySelector('.restore-banner').textContent })`);
   check('Restore puts back both tracks, positions and the mixer', restored2.a === 'Demo House 124' && restored2.b === 'Demo Drum and Bass 174' && Math.abs(restored2.pa - 20) < 0.1 && Math.abs(restored2.pb - 7.5) < 0.1 && Math.abs(restored2.x - 0.3) < 1e-9 && /Session restored/.test(restored2.banner), `A ${restored2.pa.toFixed(2)} s, B ${restored2.pb.toFixed(2)} s, xfader ${restored2.x}`);
 
+  // ---- background analysis of tracks never loaded on a deck ----
+  const wavExpr = (bpm, name, stamp) => `(() => {
+    const rate = 22050, seconds = 25, n = rate * seconds, offset = 0.2;
+    const bytes = new DataView(new ArrayBuffer(44 + n * 2));
+    const text = (o, t) => [...t].forEach((c, i) => bytes.setUint8(o + i, c.charCodeAt(0)));
+    text(0, 'RIFF'); bytes.setUint32(4, 36 + n * 2, true); text(8, 'WAVE'); text(12, 'fmt ');
+    bytes.setUint32(16, 16, true); bytes.setUint16(20, 1, true); bytes.setUint16(22, 1, true);
+    bytes.setUint32(24, rate, true); bytes.setUint32(28, rate * 2, true); bytes.setUint16(32, 2, true);
+    bytes.setUint16(34, 16, true); text(36, 'data'); bytes.setUint32(40, n * 2, true);
+    for (let b = 0; offset + b * 60 / ${bpm} < seconds; b++) {
+      const s0 = Math.round((offset + b * 60 / ${bpm}) * rate);
+      for (let i = 0; i < 300 && s0 + i < n; i++) bytes.setInt16(44 + (s0 + i) * 2, Math.round(Math.sin(2 * Math.PI * 1500 * i / rate) * Math.exp(-i / 45) * 0.8 * 32767), true);
+    }
+    return new File([bytes.buffer], ${JSON.stringify(name)}, { type: 'audio/wav', lastModified: ${stamp} });
+  })()`;
+  await evaluate(`window.dj.library.addFiles([${wavExpr(100, 'Bg - Slow 100.wav', 1700000000100)}, ${wavExpr(132, 'Bg - Mid 132.wav', 1700000000132)}, ${wavExpr(90, 'Bg - Hiphop 90.wav', 1700000000090)}])`);
+  await waitFor(`[...document.querySelectorAll('.library-table td.col-title')].filter((td) => /^(Slow 100|Mid 132|Hiphop 90)$/.test(td.textContent)).length === 3`, 5000, 'three new rows');
+  await click('.library-toolbar', 'Analyse library');
+  await waitFor(`/analysed/.test(document.querySelector('.analyse-status').textContent) && !window.dj.background.store.get().running`, 60000, 'background analysis to finish');
+  const bgRows = await evaluate(`Object.fromEntries([...document.querySelectorAll('.library-table tr')].filter((tr) => /^(Slow 100|Mid 132|Hiphop 90)$/.test(tr.querySelector('.col-title')?.textContent ?? '')).map((tr) => [tr.querySelector('.col-title').textContent, tr.children[2].textContent]))`);
+  const bgStatus = await evaluate(`document.querySelector('.analyse-status').textContent`);
+  check('Analyse library fills BPMs for tracks never loaded', bgRows['Slow 100'] === '100.0' && bgRows['Mid 132'] === '132.0' && bgRows['Hiphop 90'] === '90.0', `${JSON.stringify(bgRows)}; "${bgStatus}"`);
+  await click('.library-toolbar', 'Analyse library');
+  await waitFor(`/already analysed/.test(document.querySelector('.analyse-status').textContent)`, 5000, 'nothing-to-do message');
+  check('a second run says there is nothing left to analyse', true, await evaluate(`document.querySelector('.analyse-status').textContent`));
+
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');
     const { data } = await send('Page.captureScreenshot', { format: 'png' });

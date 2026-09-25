@@ -25,6 +25,7 @@ import { MidiInput } from './input/midi';
 import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
 import { requestPersistence } from './library/db';
+import { BackgroundAnalyser } from './library/background-analyser';
 import { TrackLoader } from './library/track-loader';
 import { describeDeck, SessionManager } from './state/session';
 import { Store } from './state/store';
@@ -195,10 +196,21 @@ async function boot(): Promise<void> {
     )
     .filter((v): v is DeckView => v !== null);
   const mixerView = start('Mixer', () => new MixerView(engine, mixer, actions, decks));
+  const background = new BackgroundAnalyser(engine.ctx, library, decks);
+  const analyseButton = h('button', { class: 'btn btn-small', text: 'Analyse library', title: 'Find BPM and key for every track in the background (pauses while a deck loads)', attrs: { type: 'button' } });
+  analyseButton.addEventListener('click', () => background.toggle());
+  const analyseStatus = h('span', { class: 'library-status analyse-status', attrs: { role: 'status' } });
+  background.store.subscribe((s) => {
+    setText(analyseButton, s.running ? 'Pause analysis' : 'Analyse library');
+    setClass(analyseButton, 'on', s.running);
+    setText(analyseStatus, s.status);
+    setClass(analyseStatus, 'is-busy', s.running);
+  });
   const libraryView = start(
     'Library',
     () =>
       new LibraryView(library, {
+        tools: [analyseButton, analyseStatus],
         load: (entry, id) => load(entry, deckById(id)),
         loadAuto: (entry) => {
           const target = decks.find((d) => !d.loaded) ?? decks.find((d) => !d.state.playing);
@@ -291,7 +303,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;
