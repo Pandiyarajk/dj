@@ -1,0 +1,122 @@
+---
+description: Browser boot-order and canvas-2D failure modes that present as a blank/black page while the server returns 200 — a single throw aborting the boot listener, module init() running before its data exists, and fractional channel values corrupting a packed hex colour.
+globs: **/*.js,**/*.html
+alwaysApply: false
+---
+
+# Canvas & Boot (browser frontend)
+
+For browser-rendered pages — canvas games, visualizers, any client-side app
+whose output is drawn rather than served. Every rule below is distilled from
+one commit that fixed a **black-screen** bug: HTTP 200, correct HTML, correct
+scripts, nothing painted.
+
+Verify with the
+[browser-smoke-test](../../skills/browser-smoke-test/SKILL.md) skill — none of
+this is catchable from a Node harness that stubs the DOM.
+
+## One throw in the boot listener kills everything after it
+
+A `DOMContentLoaded` handler is a single function. An exception anywhere in it
+aborts the **rest of it** — every later statement simply never runs. There is
+no partial recovery and nothing visible to the user.
+
+```js
+window.addEventListener('DOMContentLoaded', () => {
+  UI.init(game);          // <-- threw here
+  net.mountLobby(...);    //     never ran
+  requestAnimationFrame(loop);  // never ran — no render loop at all
+});
+```
+
+Real symptom: a bare canvas over the dark page background. Not an error page,
+not a stack trace anyone sees — a plausible-looking blank screen.
+
+- Keep the boot listener to a short sequence of calls that cannot throw, or
+  wrap the fallible parts so one failed subsystem doesn't take the app with it.
+- Never treat "the page loaded" as "the code ran".
+
+## A module's `init()` runs before its data exists
+
+Shared-singleton code is routinely initialized at page load and only *filled*
+later, when a match starts / a document opens / a fetch resolves. Anything in
+`init()` that reads dimensions or contents is reading the empty default.
+
+```js
+init(canvas) {
+  this.bake();   // ran at page load, against the W=0/H=0 map singleton
+}
+bake() {
+  const img = ctx.createImageData(map.W, map.H);  // IndexSizeError at 0x0
+}
+```
+
+Two halves, both required — a guard alone leaves you with a permanently blank
+component that never throws:
+
+1. **Guard** the early call: `if (!map.W || !map.H) { this.base = null; return; }`
+2. **Re-run it** at the point the data actually arrives, with a comment saying
+   why the call exists:
+   ```js
+   const gen = Map_.generate(seed, ...);
+   Minimap.bake();  // re-bake: init()'s bake ran before the map was sized
+   ```
+
+Canvas APIs are unforgiving about zero: `createImageData(0, 0)`,
+`getImageData` on an empty rect and `drawImage` from a 0-width source all
+throw rather than no-op.
+
+## Round channel values before packing a hex colour
+
+The idiomatic pack is **silently wrong for non-integer inputs**, and the trap
+is precise: the shifted terms coerce to int32, but the last unshifted term
+keeps its fraction.
+
+```js
+'#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)
+//                                       ^ b is never shifted — its fraction survives
+```
+
+Verified:
+
+```
+shade('#3a6ea5', 12)    ->  '#467ab1'
+shade('#3a6ea5', 12.8)  ->  '#467ab1.ccccccd'      <-- a literal '.' in the colour
+```
+
+Fractional amounts arrive naturally — an elevation lift of `e * 1.4`, a
+normalized 0–1 intensity, an eased interpolation. `addColorStop()` rejects the
+result outright and the throw takes out sprite init, and therefore every frame.
+
+**Round r, g and b before packing.** Note that `fillStyle` fails *silently*
+(assignment of an invalid colour is ignored, leaving the previous style) while
+`addColorStop` throws — so the same corrupt string is a hard crash in one place
+and a quiet wrong-colour in the other.
+
+## A 200 is not a verification for client-rendered output
+
+Both the broken and the fixed build of the page above returned
+`HTTP 200`, served identical HTML, and delivered every script. The difference
+was only visible in a browser. For anything drawn client-side, "the route
+responds" proves the transport and nothing about the product.
+
+## Give the app a URL flag that boots into its running state
+
+A menu, lobby or login gate makes automated verification brittle. One query
+flag that jumps straight to the running state — with a fixed seed for
+determinism — costs a few lines in the config parser and makes the whole app
+smoke-testable:
+
+```
+index.html?autoplay=1&seed=12345
+```
+
+## Verify
+
+- [ ] Loaded in a real browser and confirmed **zero uncaught exceptions**, not
+      just a 200.
+- [ ] Confirmed something is actually **painted** — a canvas still at its
+      `300x150` default means nothing ever sized it.
+- [ ] Every `init()` that reads dimensions/contents is guarded **and** re-run
+      when the data arrives.
+- [ ] Colour maths rounds before packing; fractional inputs tested.

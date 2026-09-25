@@ -1,0 +1,340 @@
+---
+description: Test standards — isolating tests from production state files, handling import-time side effects and global state, coverage gates that actually ratchet, and the three shapes of test that pass while proving nothing (rebuilt configuration, assertions true of any input, stubs that encode your own assumption).
+globs: **/test_*.py, **/tests/**/*.py, **/conftest.py, **/*Test.kt, **/src/test/**/*.kt
+alwaysApply: false
+---
+
+# Testing (core)
+
+The rules below are about the things that most often make a suite *lie*: touching
+real state, a coverage number that doesn't mean what it looks like, and a test
+that passes without exercising what it claims to.
+
+Most examples are Python, and the isolation/fixture sections assume pytest. The
+three sections on tests that prove nothing are language-neutral; the
+[rebuilt-configuration one](#a-test-that-rebuilds-production-configuration-proves-nothing)
+has Kotlin evidence.
+
+## Never touch production state
+
+A test run must not read, write, or delete a real database, cache file, log or
+export. Point every state path at `tmp_path` and prove it.
+
+- **Prove it, don't assume it.** For a state file that already exists in the
+  repo, checksum it before and after the suite:
+  ```bash
+  md5sum reviews.db && pytest -q && md5sum reviews.db
+  ```
+  If the digest moved, isolation is broken no matter how the fixtures read.
+- **Monkeypatch the resolver, not the value**, when a module computes a path
+  at call time with no override hook:
+  ```python
+  # _cache_path() rebuilds <repo>/data/cache.json on every call, so patching a
+  # module-level constant achieves nothing.
+  monkeypatch.setattr(mod, "_cache_path", lambda: str(tmp_path / "cache.json"))
+  ```
+- Add the override hook (env var / settings field) when you own the module —
+  patching a private function is a workaround, not a design.
+
+## Import-time side effects change how you must test
+
+If a module runs work at **import** time (an app factory that calls
+`db_init()`, a module-level `app = create_app()`, a connection opened at
+import), then patching afterwards is already too late — the side effect fired
+on first import, against the real path.
+
+Defer the import into the test, after the patch:
+
+```python
+def test_app_factory(monkeypatch, tmp_path):
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "t.db"))
+    from server.app import create_app          # deferred: import AFTER the patch
+    create_app()
+```
+
+Document this in the test module's docstring — it looks like a stylistic
+import placement and will otherwise be "tidied" to the top of the file,
+silently reintroducing the problem.
+
+Better still: don't do work at import time. Keep module import side-effect
+free and make the caller invoke the factory.
+
+## A `from x import y` binding defeats patching the source module
+
+Different failure from the section above, and the fix above does **not** solve
+it. There the problem was work firing at import; here the import succeeds
+harmlessly but *captures the object*, so a later patch of the source module
+never reaches the consumer.
+
+```python
+# pkg/consumer.py
+from .source import get_value      # binds the function object, now
+
+def run():
+    return get_value()             # calls the object bound at import time
+```
+
+```python
+monkeypatch.setattr(pkg.source, "get_value", fake)   # patches pkg.source
+pkg.consumer.run()                                   # still calls the REAL one
+```
+
+Verified — a two-module reproduction:
+
+```console
+patching pkg.source.get_value ...
+ module using `from .source import get_value` -> REAL
+ module importing inside the function        -> FAKE
+```
+
+**Nothing fails.** The test passes, having exercised production code. In one
+real case a UI test patched the disk inventory and the assertion still passed —
+against the machine's actual hardware, because the UI module had bound
+`list_disks` at import.
+
+Two fixes, in order of preference:
+
+1. **Import inside the consuming function** so the name is resolved per call.
+   This is the one to reach for when you own the consumer:
+   ```python
+   def run():
+       from .source import get_value   # looked up at call time; patchable
+       return get_value()
+   ```
+   Say why in a comment — it looks like a stylistic import placement and will
+   otherwise be hoisted to the top of the file, silently reintroducing this.
+
+2. **Patch the consumer's namespace instead of the source's** when you cannot
+   change the consumer:
+   ```python
+   monkeypatch.setattr(pkg.consumer, "get_value", fake)
+   ```
+
+Whichever you choose, **assert the patch actually took effect** — the whole
+hazard is that it fails quietly:
+
+```python
+assert table.row_count == 3, "the inventory patch did not reach the UI"
+```
+
+A module-scope `import x` (rather than `from x import y`) is immune: attribute
+lookup happens at call time, so `x.y` sees the patch.
+
+## Reset global state between tests
+
+Module-level mutables and caches leak across tests and make failures depend on
+execution order. Clear them in an `autouse` fixture in `conftest.py`:
+
+```python
+@pytest.fixture(autouse=True)
+def _reset_config_cache():
+    get_config.cache_clear()        # @lru_cache singleton
+    yield
+    get_config.cache_clear()
+```
+
+Typical offenders: `@lru_cache` settings accessors, in-memory registries,
+module-level sessions/clients, scheduler singletons.
+
+## Share fixtures via `conftest.py`
+
+Fixtures copy-pasted across test modules drift. Put `temp_db`, app/client
+factories and the autouse resets in `tests/conftest.py`. A factory *function*
+(not just a fixture) is useful when a test must build the object after
+monkeypatching env the constructor reads.
+
+Enable `--strict-markers`, and `filterwarnings = ["error"]` once the suite is
+warning-clean, so a new deprecation is caught rather than accumulated.
+
+## Coverage gates that actually ratchet
+
+An aggregate `--cov-fail-under` is easy to pass while whole modules sit at
+zero: small, well-tested pure modules carry the average. Real example — a suite
+passed a 45% aggregate gate while its scheduler, app factory and a utility
+module were each at **0%**.
+
+Add a **per-file floor** on top of the aggregate one:
+
+```bash
+pytest --cov=<pkg> --cov-report=json --cov-fail-under=<aggregate>
+python scripts/check_coverage.py coverage.json
+```
+
+See [`templates/common/check_coverage.py`](../../templates/common/check_coverage.py)
+for a ready-to-drop-in script. Seed each threshold slightly below the file's
+current coverage, then raise it as tests are added. Treat a file that vanishes
+from the report as a failure too — it usually means it was renamed or deleted,
+not that it became perfect.
+
+Set thresholds from measured reality, and never lower one to make a build go
+green; if coverage dropped, either add the test or change the threshold
+deliberately, in its own commit, with the reason.
+
+## Test the failure paths
+
+Coverage counts lines, not scenarios. For anything with an exit path other
+than "returned normally", assert the exit path directly: exceptions,
+cancellation, resource cleanup, partial persistence. Generators specifically —
+drive one partway, `.close()` it, and assert what should have been released or
+saved.
+
+## Clean up what the suite spawns
+
+A cleanup handler wrapped in `try/except`/`catch {}` around a **hard-killed**
+child process is not cleanup, it is a comment. Killing a process ungracefully
+skips its own teardown, and the files it still holds open defeat your `rm`,
+which the swallowed exception then hides.
+
+Verified case: a headless-browser harness created its profile with `mkdtemp`
+and removed it in an `exit` handler — correct-looking code that still leaked
+**4 `scoped_dir*` directories plus its profile, ~30 MB, on every single run**,
+because it called `proc.kill()` instead of shutting the browser down first.
+Several hundred runs filled a 251 GB disk and the next unrelated command died
+with `ENOSPC`.
+
+So: ask the child to exit and wait for it before killing; point it at a scratch
+path you own rather than the shared temp dir; and log cleanup failures instead
+of swallowing them. To reclaim a machine that has already accumulated this, use
+the [temp-cleanup](../../skills/temp-cleanup/SKILL.md) skill.
+
+## A test that rebuilds production configuration proves nothing
+
+If a test constructs its own serializer, client or settings object, it verifies
+that *a* configuration works — not the one the application ships. It then stays
+green while production is broken, and it is the test you will point at as
+evidence that the area is covered.
+
+```kotlin
+// Wrong. Proves the fixture can serialize; says nothing about how the app does.
+private val json = Json { encodeDefaults = true }
+
+// Right. The instance every request actually goes through.
+private val json = VwscJson.json
+```
+
+**Verified case.** An app's `Json` did not set `encodeDefaults`, so kotlinx omitted
+every property still at its default and a request object whose fields were all
+defaulted serialized to `{}`. The server bound the missing ints to `0` and
+returned zero rows with a *success* status. The serialization test had passed
+throughout — it built its own `Json { encodeDefaults = true }`. Details in
+[android-app](../android-app/android-app.mdc#kotlinxserialization-drops-defaults-and-the-server-reads-that-as-no-filter).
+
+So:
+
+- **Import the production instance** — the configured singleton, the app factory,
+  the real settings object. If it is awkward to reach from a test, that is a
+  finding about the design, not a reason to rebuild it.
+- **For anything crossing a wire, assert the serialized bytes**, not just that the
+  object round-trips. A peer that coerces a missing field (MVC model binding, most
+  form and query binders) makes a wrong body look like an empty result, so an
+  encode/decode test cannot see the bug at all.
+- **Reproduce against the real peer before fixing.** Sending the broken body and
+  watching it return `0` rows where the corrected one returns `14` is what turns a
+  plausible theory into a diagnosis.
+
+## An assertion that is true of any input is not a test
+
+An assertion that cannot fail reads exactly like one that holds. These pass on an
+empty collection, a `None`, or any value at all:
+
+```python
+assert result is not None            # true of 0, "", [], False
+assert len(items) >= 0               # true always
+assert isinstance(out, list)         # true of []
+```
+
+```kotlin
+// Meant to prove every latching command can be released. `releases` is non-empty
+// for any non-empty command list, so the || makes the whole thing tautological.
+assertTrue(command.release != null || releases.isNotEmpty())
+```
+
+**Verified case.** That Kotlin assertion passed while the UI rendered no release
+control at all — a door could be forced with no reachable way to release it. The
+fix was to assert the specific thing: the release is non-null *and* is itself
+present in the offered set.
+
+- **Assert the value, not its shape.** `assertEquals(14, rows.size)` over
+  `assertTrue(rows.isNotEmpty())` wherever the number is knowable.
+- **Prove the test can fail.** Break the production code, or invert the expected
+  value, and confirm it goes red. A test never observed failing is a hypothesis.
+- **Be suspicious of `||` and `or` in an assertion.** Each alternative widens what
+  passes; two loose alternatives usually cover everything.
+- **Guard the mechanism, not just the outcome**, when a setting is load-bearing:
+  `assertEquals("{}", stockJson.encodeToString(…))` records *why* the setting is
+  required, so a later cleanup cannot quietly remove it.
+
+## A stub that encodes your own assumption proves nothing
+
+When you stub an external tool — a CLI, a device, an HTTP API — the fixture is
+written from your *belief* about what that tool returns. If the belief is wrong,
+the stub and the code agree with each other: the suite is green and production is
+broken. Those tests were never testing the tool. They were testing your parser
+against your own assumption, and the assumption is the thing that failed.
+
+**Verified case.** Code asked an Android device for file sizes, passing the
+format as separate arguments:
+
+```python
+adb.shell("stat", "-c", "%s %n", *paths)     # six unit tests stubbed this
+```
+
+Six tests fed back well-formed `size path` lines; all six passed. The real
+device re-splits the argument string, so it received `stat -c %s %n <paths>`,
+took `%s` alone as the format and `%n` as a *file operand*:
+
+```console
+stat: '%n': No such file or directory
+4732539
+124226339
+```
+
+Bare sizes, no paths. The code matched results **by path**, so every lookup
+missed and every item reported 0 bytes. A user reported it as a UI bug.
+
+The repair that actually closes the hole asserts the **invocation**, not the
+parse:
+
+```python
+command = adb.shell_commands[0]
+self.assertIn("'%s %n'", command)     # the format survived as ONE word
+```
+
+That test fails against the old code. The six parser tests never could — they
+sat downstream of the mistake.
+
+So, for every external tool you stub:
+
+- **Assert the command or request shape, not only the handling of a canned
+  response.** At least one test per stubbed tool should pin the argv, the quoted
+  command string, or the URL/method/body actually sent. A response-parsing test
+  can only ever confirm that your parser agrees with your fixture.
+- **Capture a real response once and use it verbatim.** Run the tool, paste the
+  bytes in, and record the version and the command they came from. A fixture you
+  typed by hand is your assumption restated in a file the suite then trusts.
+- **Keep at least one smoke test against the real tool** where it is reachable,
+  even if CI cannot run it — skip it on absence rather than delete it. State in
+  the test module's docstring which tests are stub-based and which touch the
+  real thing, or the next reader will credit the suite with coverage it lacks.
+- **Let the stub fail the way the tool fails.** A stub may be optimistic about
+  *success* shapes, but it must also be able to emit the failure shapes:
+  malformed output, partial output, an error line interleaved with good lines. A
+  stub that can only produce the happy shape guarantees the parser has never met
+  the output it will meet in production.
+
+## Verify
+- [ ] Tests use the application's own serializer/client/settings, not a
+      locally-rebuilt equivalent.
+- [ ] Wire-crossing tests assert the serialized payload's keys and values.
+- [ ] No assertion in the suite is true regardless of input; each has been seen
+      to fail at least once.
+- [ ] Every suite that stubs a subprocess, CLI or HTTP peer asserts the argv or
+      command string it sends, not only the canned response it parses back.
+- [ ] Suite leaves every real state file byte-identical (checksum-verified).
+- [ ] Processes the suite spawns are shut down gracefully before being killed,
+      and their scratch directories are gone afterwards.
+- [ ] Modules with import-time side effects are imported *after* their patch,
+      with a docstring saying why.
+- [ ] Global caches/registries are reset by an autouse fixture.
+- [ ] Shared fixtures live in `conftest.py`, not duplicated per module.
+- [ ] A per-file coverage floor runs alongside the aggregate gate.

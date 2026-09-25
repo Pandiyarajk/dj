@@ -1,0 +1,16 @@
+{
+  "files": {
+    ".cursor\\rules\\authorship-header.mdc": "348963cded23a89940d945226f7296c0cd15a7314c1d5b1e621c83c297ab3ace",
+    ".cursor\\rules\\console-output-encoding.mdc": "02e246a60a3df28abe47a4dfb95b01d127a7b1fac7d2726f36b1bc61cbfc8c24",
+    ".cursor\\rules\\lint-config-integrity.mdc": "636f48d05e63bef916d8d56f3d0f132c7a788a2c3631faf51f6fef19f73d1410",
+    ".cursor\\rules\\no-secrets.mdc": "49b02ca57de13e6cdf4f8cbaaf9875c4ae11c9841531f57147a29e0e16cd6061",
+    ".cursor\\rules\\python-development.mdc": "c1132dc4d6636d18f54ac1fd2be6e74d766af344768d2cff0074f008aa9912cc",
+    ".cursor\\rules\\source-control.mdc": "f14c73721c914df357d9bc48dd53bd8b60131e8337f330d77080293418a30de9",
+    ".cursor\\rules\\testing.mdc": "f64e7b3b2def8da85b116892b5d5ed6a316d8c9491f64c49e264396ad141bc03",
+    ".cursor\\rules\\canvas-and-boot.mdc": "baada6f88bd897aa0d69b6fde10daff6940fba5db7b1593f63be69073ce802b0",
+    ".cursor\\skills\\browser-smoke-test\\browser-smoke.mjs": "fde8007942733d713beb29b9991541f854d11f27e1dd7327d54553428e0a588f",
+    ".cursor\\skills\\browser-smoke-test\\SKILL.md": "e753d45b1bddb3351661124073176683243e4762f49be480905ecb431b511c3b"
+  },
+  "hub_version": "1.0.0",
+  "profile": "browser-frontend"
+}

@@ -1,0 +1,57 @@
+---
+description: Every new file gets an Author/Date header in its docstring; edits update a Modified line. Creation date never changes.
+globs: **/*
+alwaysApply: true
+---
+
+# Authorship Header
+
+When **creating any new file**, add an author and creation-date header to the
+file's module docstring (or the language's idiomatic top-of-file comment).
+
+- **Author:** `Pandiyaraj Karuppasamy`
+- **Date:** the file's creation date, formatted `<Mon-DD-YYYY>` (three-letter
+  month, e.g. `Jul-18-2026`).
+
+## Python
+
+```python
+"""
+Short one-line description of the module.
+
+Author: Pandiyaraj Karuppasamy
+Date: Jul-18-2026
+"""
+```
+
+If the file already has a multi-line docstring, append `Author:` / `Date:` just
+before the closing `"""`. Expand a single-line docstring into the multi-line
+form.
+
+## Other languages
+
+Use the idiomatic top-of-file comment, keeping the same two fields and format:
+
+```csharp
+// Short description.
+//
+// Author: Pandiyaraj Karuppasamy
+// Date: Jul-18-2026
+```
+
+## Editing an existing file
+
+Add or update a `Modified:` line directly after `Date:`:
+
+```python
+"""
+Short one-line description of the module.
+
+Author: Pandiyaraj Karuppasamy
+Date: Jul-18-2026
+Modified: Aug-02-2026
+"""
+```
+
+- The `Date:` (creation) line **must never change**.
+- If `Modified:` exists, set it to today's date; if absent, add it after `Date:`.

@@ -1,0 +1,104 @@
+---
+description: A linter whose config fails to load reports nothing and exits before reading a single file — which is indistinguishable from a clean run. Verify the config loads, not just that lint was quiet.
+globs: **/.flake8, **/setup.cfg, **/tox.ini, **/pyproject.toml, **/.pylintrc, **/pylintrc.ini
+alwaysApply: false
+---
+
+# Lint Config Integrity (core)
+
+`core/python-development.mdc` says to lint the touched files before declaring
+done. That instruction is unsatisfiable — silently — if the linter cannot start.
+
+**Zero findings and zero linting look identical from the outside.** A config
+error is not a lint failure that someone will notice; it is the absence of lint
+coverage, reported as nothing at all.
+
+## The instance that proved it
+
+flake8 matches every entry in `ignore` against `^[A-Z]{1,3}[0-9]{0,3}$` and does
+**not** strip trailing comments. So the natural, readable, annotated form:
+
+```ini
+ignore =
+    E203,  # whitespace before ':'
+    W503,  # line break before binary operator
+```
+
+fails at startup with:
+
+```
+ValueError: Error code '#' supplied to 'ignore' option does not match
+            '^[A-Z]{1,3}[0-9]{0,3}$'
+```
+
+That is a hard failure *before any file is read*. Verified Aug-2026: this exact
+config shipped from `templates/common/flake8.ini` into **five repos plus the
+`D:\GitHub\.flake8` parent fallback** — which flake8 uses for every repo under
+that root without its own config. Linting was impossible in all of them, for
+months, and nobody noticed, because a broken linter and a clean codebase both
+print nothing.
+
+Annotations belong **above** the list, where the parser never sees them:
+
+```ini
+# E203  whitespace before ':'
+# W503  line break before binary operator
+ignore = E203,W503
+```
+
+## The check
+
+Running the linter is not enough — you have to distinguish "found nothing" from
+"never ran". Ask the tool to load its config and report:
+
+```bash
+cd <repo> && flake8 --version   # parses the config; non-zero or a traceback = broken
+```
+
+```console
+$ flake8 --version
+7.1.1 (mccabe: 0.7.0, pycodestyle: 2.12.1, pyflakes: 3.2.0) CPython 3.13.5
+  exit=0                         <-- config loaded
+
+$ flake8 --version               # with the annotated ignore list
+ValueError: Error code '#' supplied to 'ignore' option does not match ...
+  exit=1                         <-- lint has never run here
+```
+
+Do this **once when adopting or scaffolding a repo**, and any time a lint config
+is edited. It costs one command.
+
+## Generalise it
+
+The same shape appears wherever a tool is expected to be quiet on success:
+
+- a test runner that collects **0 tests** exits 0 — see
+  [testing](testing.mdc) for suites that pass while proving nothing;
+- a type checker pointed at the wrong package reports no errors;
+- a CI step whose glob matches nothing succeeds.
+
+When a tool's success output is silence, **assert that it did work**, not merely
+that it did not complain: check the config parses, check the collected count is
+non-zero, check the file list is non-empty.
+
+## Do not silence the checks that enforce the written rules
+
+A second failure mode, found in the same config: `E722` (bare `except:`) was in
+the ignore list while `core/python-development.mdc` forbids bare `except:` in
+words. The rule was unenforceable and looked enforced.
+
+Before adding a code to `ignore`, check no hub rule states the opposite. In
+particular do not ignore:
+
+| Code | Why it is not style |
+|---|---|
+| `E722` | bare `except:` — explicitly forbidden by python-development |
+| `F821` | undefined name — a `NameError` waiting to run |
+| `F811` | redefinition of an unused name — usually a real mistake |
+| `F841` | assigned-but-never-used local — often a dropped return value |
+
+Measured Aug-2026 across a ten-repo sample, enabling `F811`/`F821`/`F841`
+produced **nine findings in total**, one of which was a genuine
+`undefined name 'os'` that would have raised at runtime. The cost of enabling
+them is negligible; the cost of ignoring them is a class of real bug that no
+other check catches.

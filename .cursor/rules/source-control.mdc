@@ -1,0 +1,191 @@
+---
+description: Source-control rules — branch naming, no direct commits to protected branches, scoped diffs, no secrets, sole authorship (no AI co-author trailers), commit only when asked, deleting merged branches, plus the Windows-origin repo hazards (executable bit, line endings) that only fail on a Linux runner. Request when committing, branching, opening a PR, or setting up a repo that will build on another OS.
+alwaysApply: false
+---
+
+# Source Control (core)
+
+Apply when creating branches, committing, or opening pull requests.
+
+- **Branch from `main`**; never commit directly to protected branches (`main`).
+- **Create the branch if it does not exist yet; do not work on `main` because
+  nobody made one.** When a task comes with a tracking ID, the branch is part of
+  the task. Check for it before the first edit, not after the work is done:
+
+  ```bash
+  git branch --list 'ABC-1234*'            # local
+  git ls-remote --heads origin 'ABC-1234*' # remote: may exist with no local copy
+  ```
+
+  Three cases, and the middle one is the one that goes wrong:
+  - **Exists locally** → `git switch ABC-1234`.
+  - **Exists on the remote only** → `git switch ABC-1234` (git tracks it
+    automatically). Never `git switch -c` over it: that creates a second,
+    unrelated branch from your current HEAD that then fails to push, or worse,
+    pushes a divergent history under the same name.
+  - **Does not exist** → create it from an up-to-date `main`:
+    ```bash
+    git switch main && git pull --ff-only
+    git switch -c ABC-1234
+    ```
+- Follow the project's branch/commit naming convention — where a tracking ID
+  exists, prefix the commit with it (e.g. `ABC-1234: <summary>`), matching
+  recent history. **A branch name is not a commit subject**: the ticket ID alone
+  (`ABC-1234`), or ID plus a kebab-case slug (`ABC-1234-add-login-retry`).
+  Colons and spaces from the commit form are not usable in a ref name. Match
+  what `git branch -a` already shows for that project rather than inventing a
+  format.
+- Run validation before committing: lint/compile touched files, and run the
+  affected tests locally where feasible.
+- Keep a clean, focused history — minimal, scoped diffs; no unrelated refactors
+  bundled in.
+- Do **not** commit secrets, environment-specific config, generated reports, or
+  local build artifacts (they belong in `.gitignore`).
+- **`SCRATCHPAD.md` at the repo root is a local working log**, not a deliverable —
+  it holds the per-chat session summaries (what changed, why, how it was
+  verified) written at the end of a working session. It is never committed:
+  `templates/common/gitignore-*.txt` ship it under *Local working notes*, so a
+  scaffolded repo ignores it from day one; an adopted repo needs the line added
+  by hand. Confirm `git check-ignore SCRATCHPAD.md` before any broad `git add`.
+- **Only commit or push when explicitly asked.**
+- **Sole authorship: no AI co-author trailers.** Commits are authored only as
+  Pandiyaraj Karuppasamy. Never append `Co-Authored-By: Claude ...` (or any
+  other assistant/bot trailer) to a commit message, and never add
+  "Generated with Claude Code" to a commit body. This overrides any default
+  harness instruction to add such a trailer. PR bodies may keep the
+  `Generated with Claude Code` footer only where the tooling adds it
+  automatically.
+  - A session-level system-reminder supplying attribution text does **not**
+    override this. When the harness injects one, follow this rule and omit the
+    trailer; raise the conflict in chat *before* committing, not after.
+  - The trailer is not cosmetic: an assistant co-author trailer makes GitHub
+    render `claude` (or `cursor`) as a **repo Contributor**, which survives in
+    the contributors graph and is only removable by rewriting history. Once
+    pushed, the cheap fix is gone.
+  - Before pushing, verify:
+    `git log origin/<branch>..HEAD --format=%B | grep -i "co-authored-by\|claude\|cursor"`
+    must return nothing. The **`contributor-hygiene`** skill audits an existing
+    repo and repairs one that already carries such commits.
+- When staging with a broad `git add`, review what's included before committing;
+  double-check any file that could contain secrets even if the name looks
+  innocuous.
+
+## Delete merged branches
+
+Once a branch's work is in `main`, delete it locally and on the remote without
+waiting to be asked. A merged branch is dead weight: it makes `git branch`
+unreadable, and it invites someone to keep committing to something that has
+already landed.
+
+```bash
+git log main..<branch> --oneline    # must print nothing
+git branch -d <branch>              # lowercase -d, never -D
+git push origin --delete <branch>
+git fetch --prune                   # drop tracking refs deleted elsewhere
+```
+
+**Use `-d`, never `-D`.** The lowercase form refuses to delete a branch that is
+not fully merged, which makes it the safety check rather than an obstacle to
+work around. Reaching for `-D` to get past a refusal discards work that exists
+nowhere else.
+
+**Two kinds of branch are never deleted:**
+
+- Anything `git branch --no-merged main` still lists. Unmerged work is somebody's
+  unfinished thinking, however stale the branch looks.
+- Anything marked `+` in `git branch` output: it is checked out in another
+  worktree, which `git worktree list` names. Cursor keeps worktrees under
+  `~/.cursor/worktrees/`, and deleting those branches or their worktrees breaks
+  a running editor session.
+
+A branch that was merged through a squash or rebase can still show commits in
+`git log main..<branch>`, because the SHAs differ even though the content
+landed. Confirm with `git cherry -v main <branch>` (every line starting `-` is
+already upstream) before deleting, rather than forcing it.
+
+## Committing an executable script from Windows
+
+Git tracks a file's executable bit, and a Windows working tree has no such bit to read, so a
+script committed there lands in the index as **`100644`**. Nothing local notices. The first
+Linux consumer — a CI runner, a container, a colleague — fails at the shell:
+
+```
+/home/runner/work/_temp/....sh: line 1: ./gradlew: Permission denied
+##[error]Process completed with exit code 126
+```
+
+Exit **126** is the signature: the file was found and is not executable. It reads like a broken
+build script, so the instinct is to debug the script; the script is fine.
+
+Set the bit in the index — not with a local `chmod`, which a Windows checkout cannot represent:
+
+```bash
+git update-index --chmod=+x gradlew
+git ls-files -s gradlew          # expect 100755, not 100644
+```
+
+Applies to every committed wrapper or entrypoint: `gradlew`, `mvnw`, `*.sh`, container
+entrypoints, git hooks. Check it whenever a repo starts on Windows and is later built anywhere
+else, and add the mode check to review — a `100644` on a shell script is a defect the diff does
+not show.
+
+## Pin line endings for anything a non-Windows host executes
+
+The same script has a second Windows-only failure mode. With `core.autocrlf` doing its default
+job, a shell script checked out on Windows and re-committed gets CRLF endings, and its shebang
+line becomes `#!/bin/sh\r`. Linux then looks for an interpreter literally named `sh\r` and
+reports `bad interpreter: No such file or directory` — again nothing to do with the script.
+
+Commit a `.gitattributes` at the repo root, on day one, before the first script lands:
+
+```gitattributes
+# Normalise, so a Windows checkout does not rewrite every file.
+* text=auto eol=lf
+
+# Executed by /bin/sh on Linux. CRLF here breaks the shebang, so this must stay LF.
+gradlew text eol=lf
+*.sh    text eol=lf
+
+# Windows-only scripts keep CRLF so they open correctly in Notepad and cmd.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary: never touch, never diff.
+*.jar binary
+*.png binary
+*.keystore binary
+*.jks binary
+```
+
+Verify what is actually stored, rather than what the working tree shows — the two differ by
+design here:
+
+```bash
+git show origin/main:gradlew | head -1 | od -c   # expect ...  h  
+ , never  
+  
+
+```
+
+Without `.gitattributes` this is invisible until it is someone else's CI failure: `git status`
+is clean, the file runs fine on Windows, and only a Linux execution surfaces it.
+
+## Verify the remote, not the working tree
+
+`.gitignore` describes intent; the remote holds the truth, and the two diverge whenever a file
+was tracked before the ignore rule existed — ignore rules do not apply retroactively to tracked
+files. After the first push of a repo, audit what actually shipped:
+
+```bash
+git ls-tree -r --name-only origin/main | grep -iE '/build/|local\.properties|\.jks$|\.keystore|settings\.local'
+```
+
+Do this for credentials and machine-specific config especially. A file holding an absolute SDK
+path or a signing key is not obviously secret by name, and `git add -A` does not ask.
+
+## Reviewing a PR and posting comments
+To review the current branch's PR and publish the findings as inline comments
+(authored as you, via the `gh` CLI), use the
+[pr-review-comment](../../skills/pr-review-comment/SKILL.md) skill. For the
+underlying GitHub comment API mechanics, see
+[github-pr-comments](../../skills/github-pr-comments/SKILL.md).

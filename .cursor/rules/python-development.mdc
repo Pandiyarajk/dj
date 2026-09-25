@@ -1,0 +1,204 @@
+---
+description: Baseline Python coding standards for any project — naming, reuse-before-writing, exception handling, docstrings, no secrets.
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python Development (core)
+
+Applies to every Python file. Stack-specific overlays (qa-web, web-app,
+pypi-package) add to — never contradict — these.
+
+## Standards
+- **Follow the existing module's style first** — mirror the imports, naming and
+  structure of sibling files before introducing anything new.
+- Use meaningful, explicit names. Helpers are verbs (`create_*`, `get_*`,
+  `validate_*`, `build_*`, `load_*`).
+- **Reuse before writing.** Search the codebase for an existing helper before
+  adding a new one. Do not duplicate logic.
+- Keep functions small and single-responsibility.
+- Target Python 3.11+. Prefer `from __future__ import annotations` and PEP 604
+  unions (`str | None`, not `Optional[str]`) in new code.
+- Group imports: stdlib, third-party, local — separated by blank lines.
+- Use `.get("key", default)` when reading external/config data so a missing key
+  has a safe fallback — but note it only guards a **missing** key, not a
+  malformed value. `{"k": ""}.get("k", 0)` returns `""`, so
+  `int(headers.get("X-RateLimit-Limit", 0))` still raises `ValueError` on an
+  empty or non-numeric header. When the value is then coerced, coerce
+  defensively:
+  ```python
+  def _as_int(value, default=0):
+      try:
+          return int(value)
+      except (TypeError, ValueError):
+          return default
+  ```
+
+## Network calls
+- **Every outbound HTTP call gets an explicit `timeout=`.** `requests` has no
+  default timeout: `session.post(url, json=data)` with no `timeout` waits
+  forever if the server accepts the connection and never answers. That is not a
+  slow request, it is a hung process — in a test suite or a CI step it burns the
+  whole job's wall clock with no error to diagnose. Pass a timeout on every
+  `get`/`post`/`put`/`delete`, including the ones inside retry helpers and
+  teardown/logout paths, which are the ones that get missed.
+- Catch `requests.exceptions.Timeout` where a timeout is an expected outcome
+  rather than letting it surface as a generic failure.
+- **Set an explicit `User-Agent` naming the tool.** "We don't set one" means the
+  library's default goes on the wire, and those are blocked by name: measured
+  Aug-2026, `Python-urllib/3.13` got **HTTP 403 `error code: 1010`** from a
+  Cloudflare-fronted portal and `python-requests/2.32.3` got a **406** from a
+  ModSecurity host, where a `mytool/0.1 (+url)` UA reached the application on
+  both. `urllib` adds its default at send time, so `Request.get_header("User-agent")`
+  returns `None` while the header is still sent — the UA line is load-bearing,
+  not decoration. Say so in a comment so a cleanup doesn't delete it.
+- **A WAF block page is not empty data.** It arrives as valid HTML (226 bytes,
+  `curl` exit 0), so parsers report "nothing found" instead of "refused". Guard
+  the fetch boundary on body size plus block markers and raise. Diagnosis and
+  the escalation order are in
+  [waf-blocked-scraper](../../skills/waf-blocked-scraper/SKILL.md).
+
+## Exception handling
+- Catch specific exceptions where practical; a broad `except Exception as err:`
+  is acceptable only when it logs meaningfully and does not swallow the error
+  silently.
+- Do **not** write bare `except:` or re-raise raw stack traces to users.
+- Do **not** use `print()` for diagnostics in library/app code — use `logging`.
+
+## Docstrings
+- **Public functions/methods** get a full docstring: one-line summary, then
+  typed `Args:` / `Returns:` / `Raises:` (Google style). Type each parameter;
+  mark optionals; give the return type and meaning (omit Returns for `None`).
+- **Small internal helpers and thin wrappers** may use a single action-focused
+  line describing what the code does.
+
+## Linter suggestions that can be wrong
+
+A linter autofix is a suggestion, not a proof. Two that silently change
+behaviour:
+
+- **`sqlite3.Row` membership.** Ruff `SIM118` rewrites
+  `"result" in row.keys()` → `"result" in row`. On a `sqlite3.Row` that
+  inverts the logic: `in` scans **values**, not keys. Verified —
+  `"id" in row.keys()` is `True` while `"id" in row` is `False`, and
+  `"result" in row` is `True` only because `"result"` happens to be a stored
+  value. Keep `.keys()` and mark it `# noqa: SIM118` with a comment saying
+  why, so the next person doesn't "fix" it again.
+- **Ternary rewrites (`SIM108`)** are safe, but only apply them where the
+  result still reads clearly; don't let a linter flatten a branch whose two
+  arms mean genuinely different things.
+
+Before accepting any autofix on logic (as opposed to formatting/imports),
+confirm the rewritten expression means the same thing for the *actual types
+involved*, not just for a plain `dict`/`list`.
+
+## Hard prohibitions
+- No hardcoded credentials, tokens, hostnames, ports, connection strings, or
+  environment-specific values. Pull them from config / environment. See
+  [no-secrets](no-secrets.mdc).
+- **No hardcoded absolute repo/checkout paths** (e.g.
+  `r"D:\GitHub\myrepo\..."` or `r"C:\actions-runner\_work\myrepo\myrepo\..."`).
+  A repo is checked out to a different absolute root on every machine and CI
+  runner, so a literal root works on the machine that wrote it and fails
+  silently elsewhere — no exception if the fallback path also doesn't exist,
+  just a skipped step or a wrong file used. Derive the path at runtime from
+  the current file's own location instead:
+  ```python
+  import os
+  repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+  data_path = os.path.join(repo_root, "TestData", "Images")
+  ```
+  walking up from the file to a fixed, known-stable point in the repo layout.
+  When the same path is built at multiple call sites, hoist it to a single
+  module-level constant computed once at import time rather than repeating
+  the `os.path.join` at each site. Verified in hirsch-velocity-automation
+  (Sep-2026): 8 files carried a literal `D:\GitHub\hirsch-velocity-automation\...`
+  or `C:\actions-runner\_work\hirsch-velocity-automation\hirsch-velocity-automation\...`
+  root that broke between a dev machine and the GitHub Actions self-hosted
+  runner.
+- No mutable default arguments (`def f(x={})`) in new code.
+
+## Verify
+- Lint / compile touched Python files before declaring done
+  (`python -m py_compile`, then flake8/ruff if configured).
+- **Confirm the linter actually ran.** A config that fails to load makes the
+  linter exit before reading a file, which is indistinguishable from a clean
+  run — `cd <repo> && flake8 --version` parses the config and is the cheap
+  check. See [lint-config-integrity](lint-config-integrity.mdc), which also
+  lists the codes that must never be added to `ignore` because a hub rule
+  states the opposite.
+
+## Console output
+Any script that prints a non-ASCII character (`→`, `·`, `—`, `…`) can raise
+`UnicodeEncodeError` on a `cp1252` Windows console *after* its work has already
+succeeded, exiting non-zero with a correct output file on disk. Reconfigure
+stdout/stderr at the entry point — see
+[console-output-encoding](console-output-encoding.mdc).
+
+## When a fix depends on a package, record the version that fixed it
+
+Installing something to make a failure go away is half the work. The other half
+is writing down *what* was installed, at *which* version, and *what the failure
+looked like* — otherwise the next clone reproduces the failure and the next
+reader has no way to connect the two.
+
+When a fix is "install X" or "upgrade X", record all three:
+
+1. **The exact version that was verified**, not a range and not "latest".
+   `pip -q install X` then `python -c "from importlib.metadata import version;
+   print(version('X'))"` — read it back rather than trusting what you typed,
+   because a resolver can install something other than what was asked for.
+2. **The symptom it fixes, in the words the failure actually uses.** This is
+   the part that gets skipped and the part that pays. A missing package rarely
+   announces itself: an optional extra that some dependency imports *eagerly*
+   fails at import with the name of the **transitive** package, so the error
+   reads like an unrelated environment problem rather than a missing extra.
+   Measured case: without SQLAlchemy, APScheduler's job store raised
+   `ModuleNotFoundError: No module named 'sqlalchemy'` and failed fifteen tests
+   at collection — naming neither APScheduler nor the `[schedule]` extra that
+   was actually absent. Someone reading only the traceback installs the wrong
+   thing or shrugs at it for weeks.
+3. **Where a reader will look**: the repo's `CLAUDE.md` for a standing
+   environment fact, `CHANGELOG.md` for the change itself. "Tests need
+   `pip install -e .[schedule]`" belongs next to the test command, not in a
+   commit message nobody greps.
+
+State plainly what still works without it. "Sending is unaffected; `schedule`,
+`jobs`, `daemon` and `run-due` cannot start" tells a reader whether they need it
+at all, where "install the extra" does not.
+
+## Dev environments: pin what you verified, without pinning what you ship
+
+A **library** states ranges in `pyproject.toml`. Pinning a library's
+dependencies exactly makes it uninstallable beside anything else that pins
+differently, so ranges are not laziness there, they are the contract.
+
+That leaves nothing recording what a green run was actually measured against.
+A `requirements.txt` alongside is the complement, not a second source of truth:
+
+```
+# Exact versions one full green run was measured against.
+# pyproject.toml stays the source of truth for what this DEPENDS on.
+# Verified on Python 3.13.5, Windows 11: 170 passed.
+httpx==0.28.1
+apscheduler==3.11.0
+sqlalchemy==2.0.54
+pytest==8.4.1
+```
+
+- Say in the header which file wins, or the two drift into disagreement and
+  nobody knows which to believe.
+- Record the **interpreter and OS** the run happened on, and the result. "170
+  passed" dates the claim; "should work" does not.
+- Include the optional extras the *tests* need even when the shipped package
+  does not need them, since that is exactly the gap that produces import-time
+  failures on a clean clone.
+- Keep it out of the sdist `include` list — it is a repo artifact, not part of
+  the distribution.
+- Application (non-library) repos are the opposite case: pin in the manifest
+  itself, because there is nothing downstream to be compatible with.
+
+## Tests
+For test isolation from production state files, import-time side effects,
+global-state resets and coverage gates that actually ratchet, see
+[testing](testing.mdc).

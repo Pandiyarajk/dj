@@ -1,0 +1,128 @@
+---
+description: Non-ASCII console output crashes a legacy Windows console after the work has already succeeded — reconfigure stdout/stderr to UTF-8 so a rendering detail cannot turn a completed run into a failed one.
+globs: **/cli.py, **/__main__.py, **/main.py, **/scripts/**/*.py, **/tools/**/*.py
+alwaysApply: false
+---
+
+# Console Output Encoding (core)
+
+Any script that prints a character outside ASCII — `→`, `·`, `—`, `…`, `✓`, an
+em dash in a report, a name with an accent — can die on a Windows console whose
+code page is `cp1252`. The failure is worse than it looks: **it happens after
+the real work has finished**, so the output file is complete and correct and the
+process still exits non-zero.
+
+## Reproduction
+
+```python
+# demo.py
+import pathlib
+pathlib.Path("out.md").write_text("done - full report", encoding="utf-8")  # work succeeds
+print("wrote report → ok · done — fine")                    # then this dies
+```
+
+```console
+$ PYTHONIOENCODING=cp1252 python demo.py
+UnicodeEncodeError: 'charmap' codec can't encode character '→' in position 13
+  exit=1
+$ cat out.md
+done - full report          <-- the work was complete; only the print failed
+```
+
+Verified on Python 3.13, Windows. `PYTHONIOENCODING=cp1252` reproduces on any
+platform what a default `cmd.exe`/PowerShell console does natively.
+
+## Why it matters beyond cosmetics
+
+- **It is a false failure signal.** A wrapper, scheduled task or CI step that
+  checks the exit code sees a failed run and may retry it, alert on it, or bin
+  a perfectly good artifact.
+- **It is invisible in development.** Windows Terminal, VS Code's terminal and
+  most CI runners are already UTF-8, so the crash only appears on the plain
+  console — often on someone else's machine, or under a scheduled task.
+- **The traceback blames the wrong line.** It points at a `print()`, not at the
+  formatting code that chose the character.
+
+## The fix
+
+Normalise the streams once, at the entry point, before any output:
+
+```python
+def _make_output_utf8_safe() -> None:
+    """Stop non-ASCII output from crashing a legacy Windows console."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:          # stream replaced by a non-TextIO object
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            try:
+                reconfigure(errors="replace")   # keep the code page, never raise
+            except (ValueError, OSError):
+                pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    _make_output_utf8_safe()
+    ...
+```
+
+```console
+$ PYTHONIOENCODING=cp1252 python demo.py --fix
+wrote report → ok · done — fine
+  exit=0
+```
+
+- **Prefer UTF-8, fall back to lossy, never raise.** The two-step fallback
+  matters: if the console genuinely cannot be switched, `errors="replace"`
+  still prevents the crash and prints `?` for the odd character. Losing a
+  glyph is always better than losing the run.
+- **Guard `reconfigure` with `getattr`.** It exists on `io.TextIOWrapper` but
+  not on every object that can be assigned to `sys.stdout` — a captured stream
+  in a test harness, or a redirect object, may not have it.
+- **Do it at the entry point, not per call site.** One call covers every
+  `print()`, `logging` StreamHandler and traceback in the process.
+
+## Related but different: byte-exact output
+
+When the *exact bytes* matter — piping fetched content onward, reproducing an
+API payload — do not rely on the text layer at all; write the bytes:
+
+```python
+sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
+```
+
+Use that for byte-fidelity cases only (see
+[jira-operations](../../skills/jira-operations/SKILL.md)). For ordinary
+human-facing CLI output, `reconfigure` at startup is the right fix — routing
+every `print()` through `sys.stdout.buffer` is noise.
+
+## Files written for other programs
+
+This rule is about the *console*. Files always get an explicit encoding
+regardless:
+
+```python
+path.write_text(text, encoding="utf-8")     # never rely on the platform default
+```
+
+`open()` and `Path.write_text()` without `encoding=` use the locale encoding,
+which is how a UTF-8 report becomes mojibake when it is written on one machine
+and read on another.
+
+A file can also be *too* explicit. Windows PowerShell's `Set-Content -Encoding UTF8`
+writes a BOM, and a Python consumer reading it with `encoding="utf-8"` rejects
+the whole file — see [powershell/silent-failures](../powershell/silent-failures.mdc).
+Read interchange files with `utf-8-sig`, which accepts either.
+
+## Verify
+
+Do not trust a UTF-8 development terminal. Force the legacy encoding:
+
+```bash
+PYTHONIOENCODING=cp1252 python cli.py <args-that-print-a-report>; echo "exit=$?"
+```
+
+Exit code must be `0` and the command must print something. Add this to the
+smoke checks for any CLI whose output includes rendered text.

@@ -1,0 +1,24 @@
+# Normalise line endings so a Windows checkout does not rewrite every file.
+* text=auto eol=lf
+
+# Executed by /bin/sh on Linux runners. CRLF makes the shebang "#!/bin/sh\r", so Linux
+# hunts for an interpreter literally named "sh\r". These must stay LF everywhere.
+gradlew  text eol=lf
+mvnw     text eol=lf
+*.sh     text eol=lf
+
+# Windows-only scripts keep CRLF so they open correctly in Notepad and cmd.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary: never touch, never diff.
+*.jar      binary
+*.png      binary
+*.jpg      binary
+*.gif      binary
+*.ico      binary
+*.pdf      binary
+*.zip      binary
+*.keystore binary
+*.jks      binary
