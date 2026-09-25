@@ -48,6 +48,10 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     press('jump.back', () => deck.beatJump(-1));
     press('jump.forward', () => deck.beatJump(1));
     press('bpm.double', () => deck.scaleBpm(2));
+    press('tap', () => deck.tap());
+    press('grid.earlier', () => deck.nudgeGrid(-5));
+    press('grid.later', () => deck.nudgeGrid(5));
+    press('grid.here', () => deck.setBeatHere());
     press('bpm.halve', () => deck.scaleBpm(0.5));
     for (const size of LOOP_SIZES) press(`loop.${size}`, () => deck.autoLoop(size));
     for (let i = 0; i < HOT_CUE_COUNT; i++) {

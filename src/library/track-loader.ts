@@ -40,6 +40,8 @@ const SAVE_DEBOUNCE_MS = 800;
 interface PendingCues {
   cuePoint: number;
   hotCues: (number | null)[];
+  bpm: number | null;
+  firstBeat: number;
   deck: DeckController;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -259,11 +261,18 @@ export class TrackLoader {
     deck.store.subscribe((state, previous) => {
       const track = state.track;
       if (!track || track.key.startsWith('demo:') || state.track !== previous.track) return;
-      if (state.hotCues === previous.hotCues && state.cuePoint === previous.cuePoint) return;
+      // Analysis setting the grid is saved by saveAnalysis; this saves user edits
+      // (cues, tap tempo, grid nudges, x2 / /2).
+      const gridEdit = (state.bpm !== previous.bpm || state.firstBeat !== previous.firstBeat) && state.analysis === null && previous.analysis === null && previous.bpm !== null;
+      if (state.hotCues === previous.hotCues && state.cuePoint === previous.cuePoint && !gridEdit) return;
+      if (gridEdit) {
+        const row = this.rows.get(deck);
+        if (row) this.library.noteAnalysis(row, state.bpm, state.key);
+      }
       const pending = this.pendingCues.get(track.key);
       if (pending) clearTimeout(pending.timer);
       const timer = setTimeout(() => this.writeCues(track.key), SAVE_DEBOUNCE_MS);
-      this.pendingCues.set(track.key, { cuePoint: state.cuePoint, hotCues: state.hotCues, deck, timer });
+      this.pendingCues.set(track.key, { cuePoint: state.cuePoint, hotCues: state.hotCues, bpm: state.bpm, firstBeat: state.firstBeat, deck, timer });
     });
   }
 
@@ -272,7 +281,7 @@ export class TrackLoader {
     if (!pending) return;
     this.pendingCues.delete(key);
     clearTimeout(pending.timer);
-    patchTrack(key, { cuePoint: pending.cuePoint, hotCues: pending.hotCues }).catch((error) => this.saveFailed(pending.deck, error));
+    patchTrack(key, { cuePoint: pending.cuePoint, hotCues: pending.hotCues, bpm: pending.bpm, firstBeat: pending.firstBeat }).catch((error) => this.saveFailed(pending.deck, error));
   }
 
   /** Write every pending cue edit now (page hidden or closing). */

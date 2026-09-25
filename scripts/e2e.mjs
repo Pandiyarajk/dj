@@ -649,6 +649,24 @@ try {
   await evaluate(`window.dj.mixer.set({ cueMix: 0, cueMode: 'off' })`);
   check('prelisten stops and says so', (await evaluate(`document.querySelector('.listen-title').textContent`)) === 'Prelisten stopped');
 
+  // ---- tap tempo and grid editing (deck B, paused) ----
+  const tapStart = Date.now();
+  for (let t = 0; t < 6; t++) {
+    await click('.deck-b .grid-row', 'TAP');
+    await sleep(Math.max(0, tapStart + (t + 1) * 500 - Date.now()));
+  }
+  const tapped = await evaluate(`${deckExpr(1)}.effectiveBpm`);
+  const g0 = await evaluate(`${deckExpr(1)}.state.firstBeat`);
+  await click('.deck-b .grid-row', 'GRID >');
+  const g1 = await evaluate(`${deckExpr(1)}.state.firstBeat`);
+  await evaluate(`${deckExpr(1)}.seek(10.123)`);
+  await sleep(100);
+  await click('.deck-b .grid-row', 'SET BEAT');
+  const onBeat = await evaluate(`(() => { const d = ${deckExpr(1)}; const i = (d.position() - d.state.firstBeat) * d.state.bpm / 60; return Math.abs(i - Math.round(i)); })()`);
+  const beatLen = 60 / (await evaluate(`${deckExpr(1)}.state.bpm`));
+  const gridShift = (((g1 - g0) % beatLen) + beatLen) % beatLen;
+  check('TAP sets the tempo, GRID nudges 5 ms, SET BEAT puts a beat at the playhead', Math.abs(tapped - 120) < 3 && Math.abs(gridShift - 0.005) < 1e-6 && onBeat < 1e-3, `tapped ${tapped.toFixed(1)} BPM, shift ${(gridShift * 1000).toFixed(2)} ms, off-beat ${onBeat.toFixed(4)}`);
+
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');
     const { data } = await send('Page.captureScreenshot', { format: 'png' });

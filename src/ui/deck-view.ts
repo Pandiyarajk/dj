@@ -138,6 +138,12 @@ export class DeckView {
             btn('<< JUMP', 'jump.back', 'Beat jump back by the loop size', 'btn-small btn-wide'),
             btn('JUMP >>', 'jump.forward', 'Beat jump forward by the loop size', 'btn-small btn-wide'),
           ]),
+          h('div', { class: 'loop-row grid-row' }, [
+            btn('TAP', 'tap', 'Tap on the beat to set the BPM (3 taps or more)', 'btn-small'),
+            btn('GRID <', 'grid.earlier', 'Move the beat grid 5 ms earlier', 'btn-small'),
+            btn('SET BEAT', 'grid.here', 'Put a beat exactly at the playhead', 'btn-small'),
+            btn('GRID >', 'grid.later', 'Move the beat grid 5 ms later', 'btn-small'),
+          ]),
           mixer ? this.fxRow(actions, mixer) : null,
           h('div', { class: 'transport' }, [this.cueButton, this.playButton]),
         ]),

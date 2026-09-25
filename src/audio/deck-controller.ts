@@ -16,6 +16,7 @@ import type { Peaks } from '../analysis/peaks';
 import { Store } from '../state/store';
 import type { AudioEngine } from './engine';
 import { fitLoop, phasePreservingTarget } from './loops';
+import { addTap, tapBpm } from './tap';
 import type { ChannelStrip } from './mixer';
 import { beatLength, snapToBeat, TEMPO_RANGES, type BeatGrid } from './sync';
 import type { DeckCommand, DeckReport } from './worklets/deck-processor';
@@ -162,6 +163,7 @@ export class DeckController {
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
   /** False until the user sets a cue point on this track; until then it follows the auto cue. */
   private cueChosen = false;
+  private taps: number[] = [];
 
   constructor(
     readonly id: DeckId,
@@ -581,9 +583,52 @@ export class DeckController {
     }
     const loop = this.state.loop;
     this.store.set({ bpm: next });
+    this.taps = [];
     // An auto loop's length was in beats of the old tempo; keep it as audio.
     if (loop?.beats) this.store.set({ loop: { ...loop, beats: loop.beats * factor } });
     this.notice(`BPM ${factor > 1 ? 'doubled' : 'halved'} to ${next.toFixed(2)}`);
+  }
+
+  // ---- beat grid ------------------------------------------------------------
+
+  /**
+   * Tap tempo. From the third tap the BPM follows the taps, and the grid is
+   * anchored so a beat falls on the latest tap (where the listener heard it).
+   */
+  tap(): void {
+    if (!this.loaded) return this.notice('Load a track first', 'warn');
+    this.taps = addTap(this.taps, performance.now());
+    const tapped = tapBpm(this.taps);
+    if (tapped === null) {
+      this.notice(`Tap ${this.taps.length}: keep tapping on the beat`);
+      return;
+    }
+    // Taps are in heard time; the grid is in track time at the current rate.
+    const bpm = tapped / this.rate;
+    const beat = 60 / bpm;
+    const here = this.position();
+    this.store.set({ bpm, firstBeat: here - Math.floor(here / beat) * beat });
+    this.notice(`Tapped ${tapped.toFixed(1)} BPM (${this.taps.length} taps)`);
+  }
+
+  /** Move the beat grid by `ms` milliseconds of track time. */
+  nudgeGrid(ms: number): void {
+    const grid = this.requireGrid('Grid nudge');
+    if (!grid) return;
+    const beat = beatLength(grid.bpm);
+    const moved = grid.firstBeat + ms / 1000;
+    this.store.set({ firstBeat: ((moved % beat) + beat) % beat });
+    this.notice(`Grid ${ms > 0 ? 'later' : 'earlier'} by ${Math.abs(ms)} ms`);
+  }
+
+  /** Put a beat exactly at the playhead (for a grid that sits off the kicks). */
+  setBeatHere(): void {
+    const grid = this.requireGrid('Set beat');
+    if (!grid) return;
+    const beat = beatLength(grid.bpm);
+    const here = this.position();
+    this.store.set({ firstBeat: here - Math.floor(here / beat) * beat });
+    this.notice(`Beat set at ${formatTime(here)}`);
   }
 
   // ---- hot cues -------------------------------------------------------------
