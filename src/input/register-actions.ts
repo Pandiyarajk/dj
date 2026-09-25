@@ -58,6 +58,10 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
       actions.register(`${d}.hotcue.${i + 1}`, (v) => (v > 0 ? deck.hotCueDown(i) : deck.hotCueUp(i)));
       press(`hotcue.${i + 1}.clear`, () => deck.clearHotCue(i));
     }
+    // Jog wheel: touch is a hold, top and side carry signed ticks.
+    actions.register(`${d}.jog.touch`, (v) => deck.jogTouch(v > 0));
+    actions.register(`${d}.jog.top`, (v) => deck.jogTop(v));
+    actions.register(`${d}.jog.side`, (v) => deck.jogSide(v));
     // Hold actions: 1 on press, 0 on release.
     actions.register(`${d}.bend.down`, (v) => deck.bend(v > 0 ? -1 : 0));
     actions.register(`${d}.bend.up`, (v) => deck.bend(v > 0 ? 1 : 0));

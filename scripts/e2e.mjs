@@ -667,6 +667,34 @@ try {
   const gridShift = (((g1 - g0) % beatLen) + beatLen) % beatLen;
   check('TAP sets the tempo, GRID nudges 5 ms, SET BEAT puts a beat at the playhead', Math.abs(tapped - 120) < 3 && Math.abs(gridShift - 0.005) < 1e-6 && onBeat < 1e-3, `tapped ${tapped.toFixed(1)} BPM, shift ${(gridShift * 1000).toFixed(2)} ms, off-beat ${onBeat.toFixed(4)}`);
 
+  // ---- MIDI: 14-bit tempo, jog search, scratch, shifted pads (injected bytes) ----
+  const midi = (bytes) => evaluate(`window.dj.midi.handleMessage(${JSON.stringify(bytes)})`);
+  await evaluate(`${deckExpr(0)}.setTempoRange(0.08)`);
+  await midi([0xb0, 0x00, 96]);
+  await midi([0xb0, 0x20, 0]);
+  const midiTempo = await evaluate(`${deckExpr(0)}.state.tempo`);
+  const searchFrom = await evaluate(`${deckExpr(1)}.renderPosition()`);
+  await midi([0xb1, 0x21, 74]);
+  await sleep(100);
+  const searched = (await evaluate(`${deckExpr(1)}.renderPosition()`)) - searchFrom;
+  await evaluate(`${deckExpr(0)}.play()`);
+  await sleep(300);
+  await midi([0x90, 0x36, 127]);
+  for (let t = 0; t < 8; t++) {
+    await midi([0xb0, 0x22, 40]);
+    await sleep(15);
+  }
+  const scratchRate = await evaluate(`${deckExpr(0)}.rate`);
+  await midi([0x90, 0x36, 0]);
+  const afterScratch = await evaluate(`${deckExpr(0)}.rate`);
+  await midi([0x97, 0x00, 127]);
+  await midi([0x97, 0x00, 0]);
+  const padSet = await evaluate(`${deckExpr(0)}.state.hotCues[0]`);
+  await midi([0x98, 0x00, 127]);
+  const padCleared = await evaluate(`${deckExpr(0)}.state.hotCues[0]`);
+  await evaluate(`${deckExpr(0)}.pause()`);
+  check('MIDI: 14-bit tempo, jog search, scratch, shifted pad clear', Math.abs(midiTempo - 0.04) < 0.0002 && Math.abs(searched - 0.1) < 0.01 && scratchRate < -0.5 && Math.abs(afterScratch - (1 + midiTempo)) < 1e-9 && typeof padSet === 'number' && padCleared === null, `tempo ${(midiTempo * 100).toFixed(3)}%, search +${searched.toFixed(3)} s, scratch rate ${scratchRate.toFixed(2)} -> ${afterScratch.toFixed(3)}`);
+
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');
     const { data } = await send('Page.captureScreenshot', { format: 'png' });

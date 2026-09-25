@@ -113,6 +113,21 @@ async function boot(): Promise<void> {
   const actions = new Actions();
   registerActions(actions, decks, sync, mixer);
   const midi = new MidiInput(actions);
+  // Controller LEDs follow the app: transport, sync, pads, loop, cue buttons.
+  midi.setLedSource(() => {
+    const lit = new Map<string, boolean>();
+    decks.forEach((deck, i) => {
+      const s = deck.state;
+      const d = `deck.${deck.id}`;
+      lit.set(`${d}.play`, s.playing);
+      lit.set(`${d}.cue`, s.previewing === 'cue' || (!s.playing && deck.loaded));
+      lit.set(`${d}.sync`, s.synced);
+      lit.set(`${d}.loop.toggle`, s.loop !== null);
+      lit.set(`mixer.${deck.id}.cue`, mixer.get().channels[i].cue);
+      s.hotCues.forEach((cue, n) => lit.set(`${d}.hotcue.${n + 1}`, cue !== null));
+    });
+    return lit;
+  });
 
   const load = (entry: LibraryEntry, deck: DeckController): void => {
     if (deck.state.locked) {
@@ -439,7 +454,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

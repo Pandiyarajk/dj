@@ -32,6 +32,12 @@ const NOTICE_MS = 3000;
 const AT_CUE = 0.02;
 /** BPM overrides stay within this range. */
 const BPM_LIMITS = [40, 250] as const;
+/** Seconds of audio per jog tick: 720 ticks per turn, one turn = 1.8 s (33 rpm vinyl). */
+const JOG_SECONDS_PER_TICK = 1.8 / 720;
+/** Scratch rate update interval, ms. */
+const SCRATCH_TICK_MS = 10;
+/** Paused-deck search: seconds moved per jog tick. */
+const SEARCH_SECONDS_PER_TICK = 0.01;
 
 export interface TrackInfo {
   /** Stable identity used as the cache key (see library/db). */
@@ -164,6 +170,10 @@ export class DeckController {
   /** False until the user sets a cue point on this track; until then it follows the auto cue. */
   private cueChosen = false;
   private taps: number[] = [];
+  /** Jog-wheel state: scratching (platter touched while playing) and rim nudges. */
+  private scratch: { ticks: number; rate: number; timer: ReturnType<typeof setInterval>; keyLock: boolean } | null = null;
+  private jogBend = 0;
+  private jogBendTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     readonly id: DeckId,
@@ -208,9 +218,10 @@ export class DeckController {
     return this.state.status === 'ready';
   }
 
-  /** Current playback rate (tempo and bend). */
+  /** Current playback rate (tempo, bend and jog nudge; the scratch rate while scratching). */
   get rate(): number {
-    return 1 + this.state.tempo + this.state.bend;
+    if (this.scratch) return this.scratch.rate;
+    return 1 + this.state.tempo + this.state.bend + this.jogBend;
   }
 
   /** BPM as heard, or null before analysis. */
@@ -587,6 +598,60 @@ export class DeckController {
     // An auto loop's length was in beats of the old tempo; keep it as audio.
     if (loop?.beats) this.store.set({ loop: { ...loop, beats: loop.beats * factor } });
     this.notice(`BPM ${factor > 1 ? 'doubled' : 'halved'} to ${next.toFixed(2)}`);
+  }
+
+  // ---- jog wheel ------------------------------------------------------------
+
+  /**
+   * Platter touched or released. Touching a playing deck starts a scratch:
+   * the wheel then drives the playback rate (backwards too), as on vinyl.
+   */
+  jogTouch(touched: boolean): void {
+    if (touched && this.state.playing && !this.scratch) {
+      const keyLock = this.state.keyLock;
+      // Key lock would smear a scratch: bypass it while scratching.
+      if (keyLock) this.send({ type: 'keyLock', on: false });
+      this.scratch = { ticks: 0, rate: 0, keyLock, timer: setInterval(() => this.scratchTick(), SCRATCH_TICK_MS) };
+      this.send({ type: 'rate', rate: 0 });
+    } else if (!touched && this.scratch) {
+      clearInterval(this.scratch.timer);
+      const { keyLock } = this.scratch;
+      this.scratch = null;
+      if (keyLock) this.send({ type: 'keyLock', on: true });
+      this.send({ type: 'rate', rate: this.rate });
+    }
+  }
+
+  private scratchTick(): void {
+    const scratch = this.scratch;
+    if (!scratch) return;
+    const target = (scratch.ticks * JOG_SECONDS_PER_TICK) / (SCRATCH_TICK_MS / 1000);
+    scratch.ticks = 0;
+    // Smooth, so the rate follows the hand rather than the tick rate.
+    scratch.rate = scratch.rate * 0.6 + target * 0.4;
+    this.send({ type: 'rate', rate: scratch.rate });
+  }
+
+  /** Jog top (the platter surface): scratch while touched, else as the rim. */
+  jogTop(ticks: number): void {
+    if (this.scratch) this.scratch.ticks += ticks;
+    else this.jogSide(ticks);
+  }
+
+  /** Jog rim: a short tempo nudge while playing; frame search while paused. */
+  jogSide(ticks: number): void {
+    if (!this.loaded || ticks === 0) return;
+    if (!this.state.playing) {
+      this.seek(Math.max(0, Math.min(this.duration - 0.01, this.renderPosition() + ticks * SEARCH_SECONDS_PER_TICK)));
+      return;
+    }
+    this.jogBend = Math.max(-0.1, Math.min(0.1, ticks * 0.004));
+    this.send({ type: 'rate', rate: this.rate });
+    clearTimeout(this.jogBendTimer);
+    this.jogBendTimer = setTimeout(() => {
+      this.jogBend = 0;
+      this.send({ type: 'rate', rate: this.rate });
+    }, 60);
   }
 
   // ---- beat grid ------------------------------------------------------------
