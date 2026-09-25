@@ -430,6 +430,12 @@ export class DeckController {
       return;
     }
     void this.engine.resume();
+    // At the very end of the track PLAY would end again at once: start from
+    // the cue point instead, and say so.
+    if (this.renderPosition() >= this.duration - 0.05) {
+      this.seek(this.state.cuePoint);
+      this.notice('End of track: playing from the cue point');
+    }
     this.report = { frame: this.renderFrame(), time: this.engine.ctx.currentTime, playing: true };
     this.seq++;
     this.send({ type: 'play', seq: this.seq });

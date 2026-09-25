@@ -101,6 +101,9 @@ function send(method, params = {}, sess = sessionId) {
   return new Promise((res) => pending.set(id, res));
 }
 
+// Downloads (recordings, CSV and JSON exports) go to the throwaway profile,
+// never the user's Downloads folder: every run used to leave files there.
+await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: join(profile, 'downloads'), eventsEnabled: false }, null);
 const { targetId } = await send('Target.createTarget', { url: 'about:blank' }, null);
 ({ sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, null));
 for (const domain of ['Runtime', 'Log', 'Page']) await send(`${domain}.enable`);
@@ -306,7 +309,8 @@ try {
   await click('.deck-b .tempo-section', 'KEYLOCK');
   await sleep(1500);
   const lockedPhase = await evaluate(phaseExpr);
-  const lockedPeak = await evaluate('window.dj.engine.meter(window.dj.engine.masterAnalyser).peak');
+  // Loudest of several 21 ms windows: one window can fall between drum hits.
+  const lockedPeak = await evaluate(`(async () => { let p = 0; for (let i = 0; i < 10; i++) { p = Math.max(p, window.dj.engine.meter(window.dj.engine.masterAnalyser).peak); await new Promise((r) => setTimeout(r, 40)); } return p; })()`);
   const lockUi = await evaluate(`[...document.querySelectorAll('.btn-keylock')].every((b) => b.classList.contains('on'))`);
   check('key lock on both synced decks keeps them in phase', lockUi && Math.abs(lockedPhase) < 0.02 && lockedPeak > 0.02, `${(lockedPhase * 100).toFixed(2)}% of a beat, peak ${lockedPeak.toFixed(3)}`);
   await click('.deck-a .tempo-section', 'KEYLOCK');
@@ -777,6 +781,9 @@ try {
   const beforeLearned = await evaluate(`${deckExpr(0)}.state.playing`);
   await midi([0x9f, 0x10, 127]);
   const afterLearned = await evaluate(`${deckExpr(0)}.state.playing`);
+  if (afterLearned === beforeLearned) {
+    console.log('  learn:', JSON.stringify(await evaluate(`(() => { const d = ${deckExpr(0)}; const s = d.state; return { status: s.status, loaded: d.loaded, locked: s.locked, previewing: s.previewing, notice: s.notice, track: s.track?.title, midi: window.dj.midi.store.get().status, bound: window.dj.midi.currentBindings.filter((b) => b.action === 'deck.A.play') }; })()`)));
+  }
   await evaluate(`${deckExpr(0)}.pause()`);
   check('MIDI learn maps a new control and it works', learnedText === 'ch16 note 0x10' && afterLearned === !beforeLearned, `"${learnedText}", playing ${beforeLearned} -> ${afterLearned}`);
 

@@ -69,5 +69,15 @@ registry shared by UI, keyboard and MIDI).
   only arrow keys, never the letter shortcuts.
 - The compressor's `reduction` freezes when its input goes silent: gate the
   LIMIT light on signal.
-- `npm run e2e` has 36 checks; soak it (10+ runs) after touching sync, the
+- `npm run e2e` has 63 checks; soak it (10+ runs) after touching sync, the
   worklet or the library: several bugs here showed up 1 run in 5 to 1 in 12.
+- Worklet code is unit-tested through `tests/worklet-harness.ts` (stubs the
+  AudioWorkletGlobalScope). Loop points are fractional frames: floor any
+  folded index before reading PCM, or the output turns to NaN.
+- Anything a jump computes "for now" must be seeked with `at: now` (hot-cue
+  jumps landed 1-3.4% of a beat late until they were).
+- AudioParam automation does not advance while the context is suspended:
+  test gain stages only after playback has started.
+- The table re-renders on the next animation frame: e2e checks must wait for
+  the DOM, not read it the moment a store changes.
+- `CachedTrack.key` is the record identity; the musical key is `camelot`.

@@ -1,10 +1,10 @@
 # dj
 
-A two-deck DJ mixer that runs in the browser: beat-matched playback, a 3-band
-isolator EQ with true kills, a filter knob per channel, crossfader, BPM
-detection and sync, a beat-phase meter, hot cues, loops, a music library and
-headphone cue. No install, no account, no upload: your music stays
-on your machine.
+A two-deck DJ mixer that runs in the browser: beat-matched playback with key
+lock, BPM, key and loudness analysis, sync, a 3-band isolator EQ with true
+kills, filters and effects, hot cues, loops, a library with crates and
+suggestions, Auto DJ, mix recording, headphone cue and MIDI controllers. No
+install, no account, no upload: your music stays on your machine.
 
 > **Disclaimer.** This software is provided **AS IS**, without warranty of any
 > kind, express or implied. **Use it entirely at your own risk.** The authors
@@ -29,89 +29,139 @@ npm run dev
 ```
 
 Open the address Vite prints (usually <http://localhost:5173>). Browsers keep
-audio paused until you interact with the page, so click anywhere first.
+audio paused until you interact with the page, so click anywhere first. A
+three-step guide at the top walks you through the first mix.
 
 No music at hand? Open `http://localhost:5173/?demo=1` to load two built-in
 demo tracks (124 and 128 BPM), or use the demo rows at the top of the library.
 
+Chrome and Edge can **install** it (the install icon in the address bar); it
+then launches from the desktop and works offline.
+
 ## Using it
 
-**Loading tracks.** *Open folder* scans a music folder (Chrome and Edge);
-*Add files* picks individual files (every browser). Then press **A** or **B**
-on a row, double-click a row, drag a row onto a deck, or drop a file from your
-desktop straight onto a deck. Tracks are analysed on first load (waveform,
-BPM, beat grid); the results, cue point and hot cues are cached in the
-browser, so the next load is instant. *Reopen last folder* rescans the folder
-from your previous session.
+### Loading and preparing tracks
 
-**Decks.**
+*Open folder* scans a music folder (Chrome and Edge); *Add files* picks
+individual files (every browser). Load a track with **A** or **B** on its row,
+a double-click, a drag onto a deck, or by dropping a file on a deck.
+
+Each track is analysed once: waveform, **BPM** and beat grid, **musical key**
+(Camelot notation, such as 8A) and **loudness**. *Analyse library* does the whole
+library in the background, so the BPM and Key columns are filled before a set.
+Results, cue points and hot cues are cached in the browser.
+
+- **Search** matches title, artist and album; a number searches BPM (`124`), a
+  Camelot code searches key (`8A`).
+- **Match** (or `G`) suggests the next track: only tracks within 6% of the
+  deck on air (half and double time count), ranked by the tempo change needed,
+  key compatibility and whether you have already played them. Compatible keys
+  are highlighted.
+- **Prelisten** (the headphone button on a row) plays a track in your
+  headphones only, without touching the decks.
+- **Crates** group tracks for a set: pick or create one, then add the selected
+  track with *+ crate* or `V`.
+- **History** logs every track that was audible for 30 seconds; played rows are
+  dimmed, and the tracklist exports as CSV.
+
+### Decks
 
 | Control | What it does |
 |---|---|
-| PLAY / CUE | CDJ style. CUE while playing returns to the cue point and stops. CUE while stopped sets the cue point there and plays while held; release to snap back, or press PLAY during the hold to keep playing. New tracks cue to their first beat automatically |
+| PLAY / CUE | CDJ style. CUE while playing returns to the cue point and stops. CUE while stopped sets the cue point there and plays while held; release to snap back, or press PLAY during the hold to keep playing. New tracks cue to their first beat |
 | Overview waveform | Click or drag to jump; with Q on, a playing deck keeps its beat phase |
-| SYNC | Matches this deck's tempo and beat phase to the other deck, and keeps following its tempo. Half and double time are handled (87 syncs to 174). Moving a synced deck's tempo fader moves both decks. Press again to release |
-| /2, x2 | Correct a BPM read at half or double time |
-| Tempo fader | Top is slower, bottom is faster; double-click resets. The range button cycles 8%, 16%, 50% |
-| `-` / `+` | Hold to nudge the tempo 4% while beat-matching by ear |
+| SYNC | Matches tempo and beat phase to the other deck and keeps following it (half and double time handled). Moving a synced deck's tempo fader moves both decks |
+| KEYLOCK | Tempo changes keep the pitch. Without it, the KEY readout shows the pitch shift |
+| Tempo fader | Top is slower, bottom is faster; double-click resets. Range: 8%, 16%, 50% |
+| `-` / `+` | Hold to nudge the tempo while beat-matching by ear |
 | Q | Quantize: cues and loops snap to the beat grid |
-| Pads 1 to 8 | Hot cues, each with its own colour: an empty pad stores the position, a set pad jumps to it (keeping the beat phase with Q). On a stopped deck a set pad plays while held. Shift+click or right-click clears |
-| 1, 2, 4, 8, 16 | Auto loop of that many beats; press the same size again to exit |
-| IN / OUT / LOOP | Manual loop points; LOOP toggles the loop (or re-engages the last one) |
-| 1/2, x2 | Halve or double the active loop (or the loop size) |
+| LOCK | On-air lock: blocks loading, CUE and pause on a playing deck |
+| Pads 1 to 8 | Hot cues in their own colours: an empty pad stores the position, a set pad jumps to it. On a stopped deck a set pad plays while held. Shift+click or right-click clears |
+| 1, 2, 4, 8, 16 | Auto loop of that many beats (loops crossfade at the wrap, so they do not click) |
+| IN / OUT / LOOP, 1/2, x2 | Manual loops, reloop, halve and double |
 | JUMP | Move by the loop size in beats; an active loop moves with you |
+| TAP, GRID, SET BEAT | Fix a wrong reading: tap the tempo, nudge the grid 5 ms, or put a beat at the playhead. /2 and x2 correct half or double time |
+| FX | Echo (tempo-synced), reverb or flanger, with beat division and amount. Switching it off lets the tail ring out |
 
-**Mixer.** Per channel: trim, a 3-band isolator EQ (-26 dB to +6 dB, crossovers
-at 250 Hz and 2.5 kHz) whose KILL buttons remove the band completely, a FILTER
-knob (left is low-pass, right is high-pass, centre is off), headphone CUE, fader
-and level meter. In the middle: master level with a LIMIT light that shows when
-the safety limiter is working (turn something down), headphone level and
-routing, crossfader and its curve (*smooth* is equal power; *sharp* is a
-scratch cut). Knobs: drag up or down (Shift for fine control), scroll, or use
-the arrow keys; double-click or Home resets.
+**Undo:** `Ctrl+Z` puts back the track a load replaced, at its old position.
+**Session restore:** after a reload or crash, a banner offers the decks and
+mixer back. Closing the tab while a deck plays asks first.
 
-**Between the waveforms**, the phase meter shows how far deck B's beat is from
-deck A's ("In phase", or "B 12 ms ahead") and each deck's bar and beat, so you
-can beat-match by ear with the nudge buttons and check it by eye. The `+` and
-`-` buttons (or `=` and `-` on the keyboard) zoom both waveforms together. A
-playing track with under 30 seconds left flashes its remaining time and
-waveform red.
+### Mixer
 
-**Headphone cue** needs a second output. Choose *4-channel* if your audio
-interface or controller has four outputs (master on 1/2, cue on 3/4), or
-*Split* to share one stereo output with cue in the left ear and master in the
-right, using a splitter cable.
+Per channel: trim with **auto-gain** (every track levelled to the same loudness,
+shown under TRIM), a 3-band isolator EQ (-26 dB to +6 dB, crossovers at 250 Hz
+and 2.5 kHz) whose KILL buttons remove the band completely, a FILTER knob (left
+low-pass, right high-pass), headphone CUE, fader and meter. In the middle:
+master level with a LIMIT light, AUTO GAIN switch, headphone level, CUE MIX
+(cue to master blend in the headphones) and headphone routing, then the
+crossfader and its curve.
 
-**Keyboard.** Press `?` in the app for the full list.
+**Headphone cue** needs a second output: *4-channel* on an interface or
+controller with four outputs, or *Split* (cue left, master right) with a
+splitter cable. Chrome and Edge can also send audio to another output device
+(the Output menu).
+
+The **phase meter** between the waveforms shows how far deck B's beat is from
+deck A's ("In phase", or "B 12 ms ahead"). `+` and `-` zoom both waveforms. A
+playing track with under 30 seconds left flashes red.
+
+### Recording, Auto DJ and performance mode
+
+- **REC** records the master output as a WAV file. In Chrome and Edge it
+  streams straight to a file you choose, so long sets never fill memory.
+- **Auto DJ** plays the tracks on screen (a crate, a search, the whole
+  library) from the selected row, with synced 16-beat crossfades.
+- **PERFORM** is a compact layout for playing: prep controls are hidden and
+  the library shrinks to a drawer. The screen stays awake while a deck plays.
+
+### Keyboard
+
+Press `?` in the app for the full list.
 
 | Deck A | Deck B | Action |
 |---|---|---|
 | Q | P | Play / pause |
 | W | O | Cue (hold to preview) |
 | E | I | Sync |
+| T | Y | Lock on air |
 | R | U | Loop on / off |
 | D / F | H / J | Halve / double loop |
 | Z / X | N / M | Beat jump back / forward |
 | A / S | K / L | Nudge slower / faster (hold) |
 | 1 2 3 4 | 7 8 9 0 | Hot cues 1 to 4 (hold on a stopped deck; Shift clears) |
 
-Left and Right arrows move the crossfader; Shift+Down centres it. `=` and `-`
-zoom the waveforms. Keys are matched by position, so the layout is the same on
-non-QWERTY keyboards. Shortcuts keep working after you touch a fader, and pause
-while the shortcut list is open.
+| Key | Action |
+|---|---|
+| Left / Right | Crossfader towards A / B |
+| C | Centre the crossfader |
+| `/` | Search the library |
+| Up / Down | Select a track |
+| Shift+Left / Shift+Right | Load the selected track onto A / B |
+| G | Match (suggest next) on / off |
+| V | Add the selected track to the crate |
+| `=` / `-` | Zoom the waveforms |
+| Ctrl+Z | Undo the last load |
 
-**MIDI.** *Enable MIDI* connects any controller. The built-in mapping follows
-the common Pioneer DDJ layout (deck A on MIDI channel 1, deck B on channel 2).
-It has **not** been verified on real hardware; the status line in the top bar
-shows every message the controller sends and whether it is mapped, so a
-mismatch is easy to spot.
+Keys are matched by position, so the layout is the same on non-QWERTY
+keyboards. Shortcuts keep working after you touch a fader, and pause while a
+dialog is open.
+
+### MIDI controllers
+
+*Enable MIDI* connects any controller. The built-in mapping follows the common
+Pioneer DDJ layout: transport, pads (and SHIFT+pads to clear), 14-bit tempo and
+faders, jog wheels (touch the platter to scratch, turn the rim to nudge; on a
+paused deck both search), and LED feedback. It has **not** been verified on real
+hardware. *MIDI map* remaps anything by MIDI learn, and mappings can be exported
+and imported as JSON. The top bar shows every message received.
 
 ## Browser support
 
 | Browser | Status |
 |---|---|
-| Chrome, Edge | Everything, including *Open folder* and *Reopen last folder* |
-| Firefox | Everything except folder access: use *Add files* or drag and drop |
+| Chrome, Edge | Everything, including folders, streaming recording, output choice and install |
+| Firefox | Everything except folder access and output choice: use *Add files* or drag and drop; recordings download at the end |
 | Safari | Should work (Web Audio, AudioWorklet); not tested |
 
 Which audio formats load depends on the browser's decoders: MP3, WAV, AAC/M4A,
@@ -120,7 +170,7 @@ FLAC and Ogg/Opus work in current Chrome and Edge.
 ## Development
 
 ```bash
-npm test          # unit tests: BPM detection, sync maths, mixer curves
+npm test          # unit tests (BPM, key, loudness, key lock, sync, MIDI...)
 npm run lint      # ESLint
 npm run build     # typecheck + production build into dist/
 npm run preview   # serve dist/ on http://localhost:4173
@@ -128,42 +178,42 @@ npm run e2e       # drive the built app in headless Chrome/Edge (run preview fir
 ```
 
 `npm run e2e` clicks through the real app and checks what the audio does, not
-just what the page shows (36 checks): audio reaches the master bus, beat grids
-match the demo tracks, SYNC lands in phase and stays there through tempo
-changes and hot-cue jumps, loops wrap inside the audio thread and beat jumps
-move them exactly, the low kill removes the low band, CUE previews while held,
-shortcuts survive touching a fader, a real WAV file decodes and analyses, and a
-page reload restores the analysis and hot cues from the cache.
-It needs Chrome or Edge installed (set `CHROME_PATH` if it is not found).
+just what the page shows (63 checks): audio reaches the master bus, beat grids
+match, sync stays in phase through tempo changes, hot-cue jumps and key lock,
+loops wrap in the audio thread, the kill removes the low band, echo tails ring
+out, recordings decode, prelisten stays off the master, Auto DJ hands over, MIDI
+bytes drive the decks, and reloads restore the cache and the session. It needs
+Chrome or Edge installed (set `CHROME_PATH` if it is not found).
 
 ### How it works
 
 - **Playback** runs in an AudioWorklet (`src/audio/worklets/deck-processor.ts`)
-  that owns each track's PCM, a fractional read head and the playback rate,
-  with Hermite interpolation. Loops and jumps happen inside the audio thread,
-  so they are sample-accurate, and every discontinuity is de-clicked.
-- **Sync** (`src/audio/sync.ts`) matches tempo, then moves the follower's read
-  head to the leader's beat phase. A seek carries the audio-clock time its
-  target refers to, so the audio thread compensates for however late it lands.
-- **Analysis** (`src/analysis/`) runs in a Web Worker per deck, in single
-  streaming passes, so memory stays small on long tracks: band-split waveform
-  peaks, and BPM from a normalised multi-band onset envelope. Candidate tempos
-  come from its autocorrelation over a 40 s excerpt, an off-beat check settles
-  half versus double time, and a comb over the whole track, with a step scaled
-  to its length, sets the final tempo and grid. Results are cached with a
-  version number, so an improved detector re-analyses old entries.
-- **Mixer** (`src/audio/mixer.ts`, `engine.ts`) is plain Web Audio: gain, a
-  Linkwitz-Riley isolator EQ, resonant filters, an equal-power crossfader, and
-  limiters on the master and headphone buses.
-- **Loops** crossfade for 3 ms at the wrap, so they do not click.
+  that owns each track's PCM, a fractional read head and the rate, with
+  Hermite interpolation; loops and jumps are sample-accurate and de-clicked.
+  **Key lock** is WSOLA in the same worklet: the head still moves at the tempo
+  rate, and the output is rebuilt from grains read at normal speed around it.
+- **Sync** (`src/audio/sync.ts`) matches tempo, then moves the follower to the
+  leader's beat phase; seeks carry the audio-clock time they refer to, so late
+  delivery does not shift the beat.
+- **Analysis** (`src/analysis/`) runs in Web Workers in single streaming
+  passes: band-split peaks, BPM (autocorrelation candidates, an octave check,
+  and a whole-track comb with a length-scaled step), key (chroma and key
+  profiles) and loudness (ITU-R BS.1770). Results are cached with a version
+  number, so an improved detector re-analyses old entries.
+- **Mixer** (`src/audio/mixer.ts`, `engine.ts`, `effects.ts`) is plain Web
+  Audio: auto-gain and trim, a Linkwitz-Riley isolator EQ, resonant filters,
+  effects after the fader, an equal-power crossfader, and limiters on the
+  master and headphone buses.
 
 ## Not yet
 
-Key lock (tempo change without pitch change), effects, musical key detection,
-recording the mix, a MIDI learn screen, background analysis of the whole
-library, and stem separation. The BPM detector can still misread a track whose
-pattern is genuinely ambiguous between two tempos (85 BPM house with off-beat
-hats reads as 170, for example): use the /2 and x2 buttons.
+Stem separation (the models are too large and slow for a browser today),
+four decks, and verification of the MIDI mapping on real hardware. The BPM
+detector can still misread a track whose pattern is genuinely ambiguous between
+two tempos (85 BPM house with off-beat hats reads as 170): use /2 and x2, or TAP.
+Key detection is expected to be right about two times in three on real music
+(the published figure for this method, not yet measured here); most misses are
+harmonically compatible neighbours.
 
 ## License
 
