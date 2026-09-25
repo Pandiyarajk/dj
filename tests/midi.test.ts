@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Actions } from '../src/input/actions';
-import { decodeMidi, MidiInput, relativeTicks, type MidiBinding } from '../src/input/midi';
+import { decodeMidi, DEFAULT_MIDI_MAP, MidiInput, relativeTicks, type MidiBinding } from '../src/input/midi';
+import { learnBinding } from '../src/ui/midi-learn-view';
 
 function harness(bindings?: MidiBinding[]) {
   const actions = new Actions();
@@ -85,5 +86,23 @@ describe('MidiInput', () => {
       [0x90, 0x0b, 127],
       [0x90, 0x0b, 0],
     ]);
+  });
+});
+
+describe('learnBinding', () => {
+  it('rebinds an action, frees the control from others, and keeps shift bindings', () => {
+    const learned = learnBinding(DEFAULT_MIDI_MAP, 'deck.A.play', { kind: 'note', channel: 0, number: 0x0c, value: 127, pressed: true }, 'button');
+    const play = learned.filter((b) => b.action === 'deck.A.play');
+    expect(play).toEqual([{ kind: 'note', channel: 0, number: 0x0c, action: 'deck.A.play', mode: 'button' }]);
+    // 0x0C was CUE: that control now plays, so CUE lost it.
+    expect(learned.some((b) => b.action === 'deck.A.cue' && b.number === 0x0c && b.channel === 0)).toBe(false);
+    expect(learned.some((b) => b.action === 'deck.A.keylock' && b.shift)).toBe(true);
+  });
+
+  it('learns a CC as absolute, or relative for jog actions', () => {
+    const cc = { kind: 'cc' as const, channel: 3, number: 0x30, value: 10, pressed: false };
+    expect(learnBinding([], 'mixer.A.fader', cc, 'absolute')[0].mode).toBe('absolute');
+    expect(learnBinding([], 'deck.A.jog.top', cc, 'relative')[0].mode).toBe('relative');
+    expect(learnBinding([], 'deck.A.play', cc, 'button')[0].mode).toBe('absolute');
   });
 });

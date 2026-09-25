@@ -695,6 +695,19 @@ try {
   await evaluate(`${deckExpr(0)}.pause()`);
   check('MIDI: 14-bit tempo, jog search, scratch, shifted pad clear', Math.abs(midiTempo - 0.04) < 0.0002 && Math.abs(searched - 0.1) < 0.01 && scratchRate < -0.5 && Math.abs(afterScratch - (1 + midiTempo)) < 1e-9 && typeof padSet === 'number' && padCleared === null, `tempo ${(midiTempo * 100).toFixed(3)}%, search +${searched.toFixed(3)} s, scratch rate ${scratchRate.toFixed(2)} -> ${afterScratch.toFixed(3)}`);
 
+  // MIDI learn: map a new note to deck A's play, then use it.
+  await click('.topbar-right', 'MIDI map');
+  await evaluate(`document.querySelector('.learn-row[data-action="deck.A.play"] button').click()`);
+  await midi([0x9f, 0x10, 127]);
+  await midi([0x9f, 0x10, 0]);
+  const learnedText = await evaluate(`document.querySelector('.learn-row[data-action="deck.A.play"] .learn-binding').textContent`);
+  await evaluate(`document.querySelector('dialog.learn').close()`);
+  const beforeLearned = await evaluate(`${deckExpr(0)}.state.playing`);
+  await midi([0x9f, 0x10, 127]);
+  const afterLearned = await evaluate(`${deckExpr(0)}.state.playing`);
+  await evaluate(`${deckExpr(0)}.pause()`);
+  check('MIDI learn maps a new control and it works', learnedText === 'ch16 note 0x10' && afterLearned === !beforeLearned, `"${learnedText}", playing ${beforeLearned} -> ${afterLearned}`);
+
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');
     const { data } = await send('Page.captureScreenshot', { format: 'png' });

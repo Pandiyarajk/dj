@@ -38,6 +38,7 @@ import { DeckView } from './ui/deck-view';
 import { flash, h, setClass, setText } from './ui/dom';
 import { HelpDialog } from './ui/help';
 import { HistoryDialog } from './ui/history-view';
+import { MidiLearnDialog } from './ui/midi-learn-view';
 import { LibraryView } from './ui/library-view';
 import { MixerView } from './ui/mixer-view';
 import { PhaseMeter } from './ui/phase-meter';
@@ -189,13 +190,15 @@ async function boot(): Promise<void> {
     setText(recButton, s.recording ? `REC ${formatDuration(s.seconds)}` : 'REC');
     setText(recStatus, s.recording ? `${(s.bytes / 1e6).toFixed(1)} MB` : s.status);
   });
+  const learnDialog = new MidiLearnDialog(midi);
+  void learnDialog.restore();
   const helpButton = h('button', { class: 'btn btn-small', text: 'Shortcuts (?)', attrs: { type: 'button' } });
   helpButton.addEventListener('click', () => help.toggle());
 
   const topbar = h('header', { class: 'topbar' }, [
     h('div', { class: 'brand' }, [h('span', { class: 'brand-mark' }), h('span', { text: 'dj' })]),
     audioPill,
-    h('div', { class: 'topbar-right' }, [recStatus, recButton, outputSelect, midiStatus, midiButton, helpButton]),
+    h('div', { class: 'topbar-right' }, [recStatus, recButton, outputSelect, midiStatus, midiButton, learnDialog.button, helpButton]),
   ]);
 
   // Waveform zoom, shared by both decks so their beats line up on screen.
@@ -326,7 +329,7 @@ async function boot(): Promise<void> {
 
   const console_ = h('main', { class: 'console' }, [deckViews[0]?.el ?? null, mixerView?.el ?? null, deckViews[1]?.el ?? null]);
   if (libraryView) libraryView.el.insertBefore(listenBar, libraryView.el.children[1] ?? null);
-  app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el, historyDialog.el);
+  app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el, historyDialog.el, learnDialog.el);
 
   // The Match filter and key highlights follow the deck on air; played rows dim.
   for (const deck of decks) deck.store.subscribe((s, p) => (s.playing !== p.playing || s.tempo !== p.tempo || s.key !== p.key || s.bpm !== p.bpm) && libraryView?.refresh());

@@ -1635,6 +1635,40 @@ input[type='range']::-moz-range-thumb {
   margin: 8px 0;
 }
 
+.learn {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.learn-body {
+  max-height: 62vh;
+  overflow: auto;
+}
+
+.learn-group {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 14px 0 6px;
+}
+
+.learn-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.learn-binding {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 .history-list {
   list-style: none;
   margin: 0;

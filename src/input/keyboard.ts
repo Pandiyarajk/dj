@@ -90,6 +90,8 @@ function ownsKey(target: EventTarget | null, key: string): boolean {
  *   must not start decks behind it.
  */
 export function attachKeyboard(actions: Actions, onHelp: () => void, isBlocked: () => boolean = () => false): void {
+  // Any open modal dialog (help, history, MIDI map) blocks the deck shortcuts.
+  const modalOpen = (): boolean => isBlocked() || document.querySelector('dialog[open]') !== null;
   const byCode = new Map(KEYMAP.map((b) => [b.code, b]));
   window.addEventListener('keydown', (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey || ownsKey(event.target, event.key)) return;
@@ -98,7 +100,7 @@ export function attachKeyboard(actions: Actions, onHelp: () => void, isBlocked: 
       onHelp();
       return;
     }
-    if (isBlocked()) return;
+    if (modalOpen()) return;
     const binding = byCode.get(event.code);
     if (!binding || (binding.shiftOnly && !event.shiftKey)) return;
     event.preventDefault();
