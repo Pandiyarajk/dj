@@ -338,6 +338,79 @@ th.sortable:focus-visible {
   white-space: nowrap;
 }
 
+.btn-perform.on {
+  background: linear-gradient(180deg, #ffd96b, var(--warn));
+  border-color: #ffe39a;
+  color: #1a1400;
+  box-shadow: 0 0 12px rgba(245, 197, 66, 0.4);
+}
+
+/* Performance mode: hide prep controls, keep what is played live. */
+body.perform .grid-row,
+body.perform .loop-row:has(.btn[aria-label^='Loop in point']),
+body.perform .autogain-readout,
+body.perform .channel-strip > .knob:first-of-type,
+body.perform .crate-toolbar,
+body.perform .listen-bar:not(.active),
+body.perform .zoom-tools,
+body.perform .phase-meter .phase-bar {
+  display: none;
+}
+
+body.perform .library-table-wrap {
+  max-height: 150px;
+}
+
+body.perform .wave {
+  height: 70px;
+}
+
+.hints {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid rgba(61, 220, 151, 0.4);
+  background: rgba(61, 220, 151, 0.06);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.hints ol {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+
+.hint-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+}
+
+.hint-tick {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--line-hi);
+  flex: none;
+}
+
+.hint-step.done {
+  color: var(--good);
+}
+
+.hint-step.done .hint-tick {
+  border-color: var(--good);
+  background: radial-gradient(circle, var(--good) 0 4px, transparent 5px);
+}
+
 .restore-banner {
   display: flex;
   align-items: center;

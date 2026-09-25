@@ -194,13 +194,30 @@ async function boot(): Promise<void> {
   });
   const learnDialog = new MidiLearnDialog(midi);
   void learnDialog.restore();
+  // Performance mode: a compact layout for playing (prep controls hidden).
+  const performButton = h('button', { class: 'btn btn-small btn-perform', text: 'PERFORM', title: 'Compact performance layout: hides prep controls, shrinks the library', attrs: { type: 'button' } });
+  const setPerform = (on: boolean): void => {
+    document.body.classList.toggle('perform', on);
+    setClass(performButton, 'on', on);
+    try {
+      localStorage.setItem('dj.perform', on ? '1' : '0');
+    } catch {
+      // Storage blocked: the mode just is not remembered.
+    }
+  };
+  performButton.addEventListener('click', () => setPerform(!document.body.classList.contains('perform')));
+  try {
+    setPerform(localStorage.getItem('dj.perform') === '1');
+  } catch {
+    setPerform(false);
+  }
   const helpButton = h('button', { class: 'btn btn-small', text: 'Shortcuts (?)', attrs: { type: 'button' } });
   helpButton.addEventListener('click', () => help.toggle());
 
   const topbar = h('header', { class: 'topbar' }, [
     h('div', { class: 'brand' }, [h('span', { class: 'brand-mark' }), h('span', { text: 'dj' })]),
     audioPill,
-    h('div', { class: 'topbar-right' }, [recStatus, recButton, outputSelect, midiStatus, midiButton, learnDialog.button, helpButton]),
+    h('div', { class: 'topbar-right' }, [recStatus, recButton, outputSelect, midiStatus, midiButton, learnDialog.button, performButton, helpButton]),
   ]);
 
   // Waveform zoom, shared by both decks so their beats line up on screen.
@@ -437,6 +454,67 @@ async function boot(): Promise<void> {
   requestAnimationFrame(frame);
 
   const params = new URLSearchParams(location.search);
+
+  // Keep the screen awake while anything plays (released when both stop).
+  let wakeLock: { release(): Promise<void> } | null = null;
+  const wantAwake = (): boolean => decks.some((d) => d.state.playing) && document.visibilityState === 'visible';
+  const updateWakeLock = async (): Promise<void> => {
+    const api = (navigator as unknown as { wakeLock?: { request(type: 'screen'): Promise<{ release(): Promise<void> }> } }).wakeLock;
+    if (!api) return;
+    if (wantAwake() && !wakeLock) wakeLock = await api.request('screen').catch(() => null);
+    else if (!wantAwake() && wakeLock) {
+      await wakeLock.release().catch(() => undefined);
+      wakeLock = null;
+    }
+  };
+  for (const deck of decks) deck.store.subscribe((s, p) => s.playing !== p.playing && void updateWakeLock());
+  // The browser drops the lock when the tab is hidden; take it back on return.
+  document.addEventListener('visibilitychange', () => {
+    wakeLock = null;
+    void updateWakeLock();
+  });
+
+  // Offline: the service worker caches the app shell (production builds only).
+  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Offline support unavailable:', errorText(error)));
+  }
+
+  // First-run guide: three steps that tick themselves off.
+  const hintsDismissed = ((): boolean => {
+    try {
+      return localStorage.getItem('dj.hints') === 'done';
+    } catch {
+      return false;
+    }
+  })();
+  if (!hintsDismissed && params.get('demo') !== '1') {
+    const step = (n: number, text: string): HTMLElement => h('li', { class: 'hint-step', attrs: { 'data-step': String(n) } }, [h('span', { class: 'hint-tick' }), h('span', { text })]);
+    const steps = [step(1, 'Open your music (library below), or use the demo rows'), step(2, 'Press A or B on a row to load a deck'), step(3, 'PLAY one deck, then SYNC and PLAY the other')];
+    const close = h('button', { class: 'btn btn-tiny', text: 'Got it', attrs: { type: 'button' } });
+    const hints = h('div', { class: 'hints', attrs: { role: 'note', 'aria-label': 'Getting started' } }, [h('strong', { text: 'Getting started' }), h('ol', {}, steps), close]);
+    const done = (n: number): boolean => {
+      if (n === 1) return library.store.get().entries.some((e) => e.source.kind === 'file') || decks.some((d) => d.loaded);
+      if (n === 2) return decks.some((d) => d.loaded);
+      return decks.some((d) => d.state.synced) && decks.every((d) => d.state.playing);
+    };
+    const refresh = (): void => {
+      steps.forEach((el, i) => setClass(el, 'done', done(i + 1)));
+      if (steps.every((el) => el.classList.contains('done'))) setText(close, 'Done');
+    };
+    const timer = setInterval(refresh, 500);
+    close.addEventListener('click', () => {
+      clearInterval(timer);
+      hints.remove();
+      try {
+        localStorage.setItem('dj.hints', 'done');
+      } catch {
+        // Not remembered; shows again next visit.
+      }
+    });
+    refresh();
+    app.insertBefore(hints, waves);
+  }
+
   const session = new SessionManager(decks, mixer, loader, library);
   // Offer the last session back (never restored unasked). Skipped for ?demo=1,
   // which loads its own tracks.

@@ -1,0 +1,14 @@
+{
+  "name": "dj: browser DJ mixer",
+  "short_name": "dj",
+  "description": "Two-deck DJ mixer in the browser: sync, EQ, effects, hot cues, loops, recording.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#07090c",
+  "theme_color": "#07090c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -198,6 +198,15 @@ try {
     check(`deck ${i ? 'B' : 'A'} BPM and grid`, Math.abs(s.bpm - bpm) <= 0.05 && err <= 0.015, `${s.bpm} BPM, grid off by ${(err * 1000).toFixed(1)} ms`);
   }
 
+  // Performance mode hides prep controls and shrinks the library; service worker registers.
+  await click('.topbar-right', 'PERFORM');
+  const perform = await evaluate(`({ on: document.body.classList.contains('perform'), grid: getComputedStyle(document.querySelector('.grid-row')).display, lib: parseFloat(getComputedStyle(document.querySelector('.library-table-wrap')).maxHeight) })`);
+  await click('.topbar-right', 'PERFORM');
+  const performOff = await evaluate(`({ on: document.body.classList.contains('perform'), grid: getComputedStyle(document.querySelector('.grid-row')).display })`);
+  check('PERFORM hides prep controls and shrinks the library, and back', perform.on && perform.grid === 'none' && perform.lib <= 150 && !performOff.on && performOff.grid !== 'none', JSON.stringify({ perform, performOff }));
+  const swScope = await evaluate(`(async () => { for (let i = 0; i < 20; i++) { const r = await navigator.serviceWorker.getRegistration(); if (r) return r.scope; await new Promise((res) => setTimeout(res, 200)); } return null; })()`);
+  check('service worker registers for offline use', typeof swScope === 'string' && swScope.startsWith('http'), String(swScope));
+
   // Key and auto-gain reach the deck and the channel strip.
   const tonal = await evaluate(`({ key: document.querySelector('.deck-a .key-value').textContent, auto: document.querySelector('.channel-a .autogain-readout').textContent, db: window.dj.decks[0].state.autoGainDb, gain: window.dj.engine.strips[0].input.gain.value })`);
   check('deck shows a Camelot key and the auto-gain it applied', /^\d{1,2}[AB]$/.test(tonal.key) && /^AUTO [+-]\d+\.\d dB$/.test(tonal.auto) && Math.abs(20 * Math.log10(tonal.gain) - tonal.db) < 0.2, `key ${tonal.key}, ${tonal.auto}, strip ${(20 * Math.log10(tonal.gain)).toFixed(2)} dB`);
@@ -550,10 +559,14 @@ try {
   await waitFor(`document.querySelector('.restore-banner')`, 15000, 'restore banner');
   const bannerText = await evaluate(`document.querySelector('.restore-banner').textContent`);
   check('reload offers the last session', /Demo House 124 at 0:20/.test(bannerText) && /Demo Drum and Bass 174 at 0:07/.test(bannerText), bannerText.slice(0, 120));
+  const hintsShown = await evaluate(`document.querySelector('.hints') !== null && document.querySelectorAll('.hint-step').length === 3`);
   await click('.restore-banner', 'Restore');
   await waitFor(`window.dj.decks.every((d) => d.state.status === 'ready' && d.state.bpm !== null)`, 30000, 'session restored');
   await sleep(300);
   const restored2 = await evaluate(`({ a: window.dj.decks[0].state.track.title, b: window.dj.decks[1].state.track.title, pa: window.dj.decks[0].renderPosition(), pb: window.dj.decks[1].renderPosition(), x: window.dj.mixer.get().crossfader, banner: document.querySelector('.restore-banner').textContent })`);
+  await sleep(700);
+  const hintTwo = await evaluate(`document.querySelector('.hint-step[data-step="2"]')?.classList.contains('done') ?? false`);
+  check('first-run guide shows three steps and ticks "load a deck" once loaded', hintsShown && hintTwo, `shown ${hintsShown}, step 2 done ${hintTwo}`);
   check('Restore puts back both tracks, positions and the mixer', restored2.a === 'Demo House 124' && restored2.b === 'Demo Drum and Bass 174' && Math.abs(restored2.pa - 20) < 0.1 && Math.abs(restored2.pb - 7.5) < 0.1 && Math.abs(restored2.x - 0.3) < 1e-9 && /Session restored/.test(restored2.banner), `A ${restored2.pa.toFixed(2)} s, B ${restored2.pb.toFixed(2)} s, xfader ${restored2.x}`);
 
   // ---- background analysis of tracks never loaded on a deck ----
