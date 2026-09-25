@@ -1,0 +1,270 @@
+/**
+ * Offline tempo and beat-grid detection.
+ *
+ * Pipeline:
+ *   1. Onset-strength envelope: log-compressed energy flux in five bands, each
+ *      normalised to equal weight and summed, at about 200 frames per second.
+ *   2. Candidates: the strongest autocorrelation peaks over 60-200 BPM, folded
+ *      into [MIN_BPM, MAX_BPM), plus their doubles and halves.
+ *   3. Selection and precision: a comb over the whole track, scored at
+ *      sub-frame precision. The candidate whose beats carry the most onset
+ *      energy wins; over a few minutes of beats a tempo error of 0.05 BPM
+ *      drifts the comb off the onsets, which is what makes it precise.
+ *   4. Octave check: a slow winner whose off-beats are as strong as its beats
+ *      is really twice as fast (drum and bass read as 87 becomes 174).
+ *
+ * Author: Pandiyaraj Karuppasamy
+ * Date: Sep-25-2026
+ */
+import { lowPass } from './filters';
+
+export interface BpmResult {
+  /** Detected tempo, beats per minute, in [MIN_BPM, MAX_BPM). */
+  bpm: number;
+  /** Time of the first beat, seconds. */
+  firstBeat: number;
+  /** 0..1, how far beat positions stand out from the average envelope. */
+  confidence: number;
+}
+
+export const MIN_BPM = 70;
+export const MAX_BPM = 180;
+
+/** Target envelope frame rate; the actual rate is sampleRate / round(sampleRate / this). */
+const FRAME_RATE = 200;
+/**
+ * Off-beat / on-beat ratio above which a slow tempo is doubled. A comb at half
+ * the true tempo still lands on every other beat, so its mean ties with the
+ * true tempo's; only the strength of the beats it skips tells them apart.
+ */
+const DOUBLE_TIME_RATIO = 0.55;
+/** Upper edges of the onset bands, Hz; everything above the last edge is the top band. */
+const BAND_EDGES = [150, 600, 2500, 8000];
+
+interface Envelope {
+  values: Float32Array;
+  /** Frames per second. */
+  frameRate: number;
+  /** Samples per frame. */
+  hop: number;
+}
+
+/**
+ * Onset-strength envelope of a mono signal.
+ *
+ * Exported for tests; most callers want detectBpm().
+ */
+export function onsetEnvelope(samples: Float32Array, sampleRate: number): Envelope {
+  const hop = Math.max(1, Math.round(sampleRate / FRAME_RATE));
+  const frames = Math.floor(samples.length / hop);
+  const total = new Float32Array(frames);
+
+  // Band b is lowPass(edge[b]) - lowPass(edge[b-1]); the top band is the rest.
+  const cumulative = BAND_EDGES.filter((edge) => edge < sampleRate / 2).map((edge) => lowPass(samples, edge, sampleRate));
+  cumulative.push(samples);
+  let below: Float32Array | null = null;
+  for (const upTo of cumulative) {
+    const flux = new Float32Array(frames);
+    let prev = 0;
+    let fluxSum = 0;
+    for (let f = 0; f < frames; f++) {
+      let energy = 0;
+      for (let i = f * hop, end = i + hop; i < end; i++) {
+        const v = below ? upTo[i] - below[i] : upTo[i];
+        energy += v * v;
+      }
+      const level = Math.log1p((1000 * energy) / hop);
+      if (f > 0) {
+        flux[f] = Math.max(0, level - prev);
+        fluxSum += flux[f];
+      }
+      prev = level;
+    }
+    // Normalise per band so quiet bands (hats, snares) count as much as the kick.
+    const scale = fluxSum > 0 ? frames / fluxSum : 0;
+    for (let f = 0; f < frames; f++) total[f] += flux[f] * scale;
+    below = upTo;
+  }
+
+  const smoothed = gaussianSmooth(total, 1.5);
+  return { values: subtractLocalMean(smoothed, Math.round(FRAME_RATE * 0.25)), frameRate: sampleRate / hop, hop };
+}
+
+function gaussianSmooth(input: Float32Array, sigma: number): Float32Array {
+  const radius = Math.ceil(sigma * 3);
+  const kernel: number[] = [];
+  let sum = 0;
+  for (let k = -radius; k <= radius; k++) {
+    const w = Math.exp(-(k * k) / (2 * sigma * sigma));
+    kernel.push(w);
+    sum += w;
+  }
+  const out = new Float32Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    let acc = 0;
+    for (let k = -radius; k <= radius; k++) {
+      const j = i + k;
+      if (j >= 0 && j < input.length) acc += input[j] * kernel[k + radius];
+    }
+    out[i] = acc / sum;
+  }
+  return out;
+}
+
+/** Remove slow level changes: subtract a moving average of +/- `radius` frames, clamp at 0. */
+function subtractLocalMean(input: Float32Array, radius: number): Float32Array {
+  const prefix = new Float64Array(input.length + 1);
+  for (let i = 0; i < input.length; i++) prefix[i + 1] = prefix[i] + input[i];
+  const out = new Float32Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const lo = Math.max(0, i - radius);
+    const hi = Math.min(input.length, i + radius + 1);
+    const mean = (prefix[hi] - prefix[lo]) / (hi - lo);
+    out[i] = Math.max(0, input[i] - mean);
+  }
+  return out;
+}
+
+/** Linear interpolation into the envelope at a fractional frame. */
+function sampleAt(values: Float32Array, t: number): number {
+  const i = Math.floor(t);
+  if (i < 0 || i + 1 >= values.length) return 0;
+  const frac = t - i;
+  return values[i] * (1 - frac) + values[i + 1] * frac;
+}
+
+/** Mean envelope value at phase + k*period for all k. */
+function combMean(values: Float32Array, period: number, phase: number): number {
+  let sum = 0;
+  let count = 0;
+  for (let t = phase; t < values.length - 1; t += period) {
+    sum += sampleAt(values, t);
+    count++;
+  }
+  return count > 0 ? sum / count : 0;
+}
+
+/** Best phase of a comb at `period` frames, searched in `step`-frame increments. */
+function bestPhase(values: Float32Array, period: number, step: number): { phase: number; score: number } {
+  let best = { phase: 0, score: -1 };
+  for (let phase = 0; phase < period; phase += step) {
+    const score = combMean(values, period, phase);
+    if (score > best.score) best = { phase, score };
+  }
+  return best;
+}
+
+function foldBpm(bpm: number): number {
+  let folded = bpm;
+  while (folded < MIN_BPM) folded *= 2;
+  while (folded >= MAX_BPM) folded /= 2;
+  return folded;
+}
+
+/**
+ * Candidate tempos from the autocorrelation: its strongest peaks, folded into
+ * range, plus their double and half where those are in range too.
+ *
+ * The peaks alone are not trusted to pick the tempo. Syncopated patterns put
+ * strong autocorrelation at 2/3 or 4/3 of the beat, so the comb decides.
+ */
+function tempoCandidates(env: Envelope, count = 5): number[] {
+  const { values, frameRate } = env;
+  const minLag = Math.floor((frameRate * 60) / 200);
+  const maxLag = Math.ceil((frameRate * 60) / 60);
+  if (values.length < maxLag * 4) return [];
+
+  const acf = new Float32Array(maxLag + 2);
+  for (let lag = minLag - 1; lag <= maxLag + 1; lag++) {
+    let sum = 0;
+    for (let i = 0; i + lag < values.length; i++) sum += values[i] * values[i + lag];
+    acf[lag] = sum / (values.length - lag);
+  }
+
+  const peaks: Array<{ lag: number; value: number }> = [];
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    if (acf[lag] > 0 && acf[lag] >= acf[lag - 1] && acf[lag] > acf[lag + 1]) peaks.push({ lag, value: acf[lag] });
+  }
+  peaks.sort((x, y) => y.value - x.value);
+
+  const candidates: number[] = [];
+  const add = (bpm: number): void => {
+    if (bpm < MIN_BPM || bpm >= MAX_BPM) return;
+    if (candidates.every((c) => Math.abs(c - bpm) / c > 0.02)) candidates.push(bpm);
+  };
+  for (const { lag } of peaks.slice(0, count)) {
+    // Parabolic interpolation around the peak for a sub-frame lag.
+    const a = acf[lag - 1];
+    const b = acf[lag];
+    const c = acf[lag + 1];
+    const denom = a - 2 * b + c;
+    const offset = denom !== 0 ? (0.5 * (a - c)) / denom : 0;
+    const bpm = foldBpm((frameRate * 60) / (lag + offset));
+    add(bpm);
+    add(bpm * 2);
+    add(bpm / 2);
+  }
+  return candidates;
+}
+
+/** Refine a tempo estimate by searching `bpm +/- span` in `step` increments. */
+function refine(env: Envelope, bpm: number, span: number, step: number): { bpm: number; phase: number; score: number } {
+  let best = { bpm, phase: 0, score: -1 };
+  for (let candidate = bpm - span; candidate <= bpm + span + 1e-9; candidate += step) {
+    const period = (env.frameRate * 60) / candidate;
+    const { phase, score } = bestPhase(env.values, period, 1);
+    if (score > best.score) best = { bpm: candidate, phase, score };
+  }
+  return best;
+}
+
+/** Tempo, phase and score at full precision around a starting estimate. */
+function preciseTempo(env: Envelope, start: number): { bpm: number; phase: number; score: number } {
+  const coarse = refine(env, start, start * 0.02, 0.05);
+  const fine = refine(env, coarse.bpm, 0.06, 0.005);
+  const period = (env.frameRate * 60) / fine.bpm;
+  // Sub-frame phase around the whole-frame winner.
+  let best = { phase: fine.phase, score: fine.score };
+  for (let phase = fine.phase - 1; phase <= fine.phase + 1; phase += 0.1) {
+    const wrapped = ((phase % period) + period) % period;
+    const score = combMean(env.values, period, wrapped);
+    if (score > best.score) best = { phase: wrapped, score };
+  }
+  return { bpm: fine.bpm, ...best };
+}
+
+/**
+ * Detect tempo and first-beat offset of a mono signal.
+ *
+ * @param samples mono PCM, -1..1.
+ * @param sampleRate sample rate of `samples`.
+ * @returns the result, or null for silence or audio too short to analyse (under ~5 s).
+ */
+export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult | null {
+  const env = onsetEnvelope(samples, sampleRate);
+  const candidates = tempoCandidates(env);
+  if (candidates.length === 0) return null;
+
+  // Cheap pass to rank every candidate, then full precision on the best two.
+  const ranked = candidates
+    .map((bpm) => refine(env, bpm, bpm * 0.02, 0.1))
+    .sort((x, y) => y.score - x.score)
+    .slice(0, 2)
+    .map((r) => preciseTempo(env, r.bpm));
+  let result = ranked.reduce((best, r) => (r.score > best.score ? r : best));
+  if (result.bpm * 2 < MAX_BPM) {
+    const period = (env.frameRate * 60) / result.bpm;
+    const offBeat = combMean(env.values, period, result.phase + period / 2);
+    if (offBeat > result.score * DOUBLE_TIME_RATIO) result = preciseTempo(env, result.bpm * 2);
+  }
+
+  let mean = 0;
+  for (let i = 0; i < env.values.length; i++) mean += env.values[i];
+  mean /= env.values.length;
+  if (result.score <= 0 || mean <= 0) return null;
+
+  // Frame f summarises samples [f*hop, (f+1)*hop): report the frame centre.
+  const firstBeat = ((result.phase + 0.5) * env.hop) / sampleRate;
+  const confidence = Math.max(0, Math.min(1, (result.score - mean) / result.score));
+  return { bpm: Math.round(result.bpm * 100) / 100, firstBeat, confidence };
+}
