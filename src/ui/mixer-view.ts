@@ -6,12 +6,13 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (filter knob, limiter LED, faders synced unless dragged)
  */
+import type { DeckController } from '../audio/deck-controller';
 import type { AudioEngine } from '../audio/engine';
 import { EQ_MAX_DB, EQ_MIN_DB, TRIM_MAX_DB, TRIM_MIN_DB, type CueMode, type EqBand, type MixerState } from '../audio/mixer';
 import { centeredDbFromKnob, filterFrequencies, FILTER_OPEN_HIGH, FILTER_OPEN_LOW, knobFromCenteredDb } from '../audio/mixer-math';
 import type { Actions } from '../input/actions';
 import type { Store } from '../state/store';
-import { cssVar, dragTracker, h, setClass } from './dom';
+import { cssVar, dragTracker, h, setClass, setText } from './dom';
 import { Knob } from './knob';
 import { Meter } from './meter';
 
@@ -34,6 +35,7 @@ function formatFilter(position: number): string {
 
 interface ChannelControls {
   trim: Knob;
+  autoGain: HTMLElement;
   filter: Knob;
   faderDragging: () => boolean;
   eq: Record<EqBand, Knob>;
@@ -50,6 +52,7 @@ export class MixerView {
   private readonly crossfader: HTMLInputElement;
   private readonly crossfaderDragging: () => boolean;
   private readonly limitLed: HTMLElement;
+  private readonly autoGainButton: HTMLButtonElement;
   private readonly curveButton: HTMLButtonElement;
   private readonly master: Knob;
   private readonly cueVolume: Knob;
@@ -60,6 +63,7 @@ export class MixerView {
     private readonly engine: AudioEngine,
     mixer: Store<MixerState>,
     actions: Actions,
+    decks: DeckController[] = [],
   ) {
     const state = mixer.get();
     const strips = (['A', 'B'] as const).map((id, index) => this.buildChannel(id, index as 0 | 1, state, actions));
@@ -79,6 +83,10 @@ export class MixerView {
       onInput: (p) => actions.trigger('mixer.cueVolume', p),
     });
     this.masterMeter = new Meter('Master');
+    this.autoGainButton = actions.button(
+      'mixer.autoGain',
+      h('button', { class: 'btn btn-small btn-autogain', text: 'AUTO GAIN', title: 'Level every track to the same loudness (-10 LUFS), shown under each TRIM', attrs: { type: 'button' } }),
+    );
     this.limitLed = h('div', { class: 'limit-led', text: 'LIMIT', title: 'Lights while the master limiter is reducing gain: turn the channels or master down' });
 
     this.cueMode = h('select', { class: 'cue-mode', title: 'Headphone cue routing', attrs: { 'aria-label': 'Headphone cue routing' } });
@@ -116,6 +124,7 @@ export class MixerView {
           this.master.el,
           h('div', { class: 'master-meter' }, [this.masterMeter.el]),
           this.limitLed,
+          this.autoGainButton,
           this.cueVolume.el,
           this.cueMode,
           this.cueHint,
@@ -128,6 +137,20 @@ export class MixerView {
 
     mixer.subscribe((s) => this.render(s));
     this.render(state);
+    decks.forEach((deck, i) => {
+      const show = (): void => this.renderAutoGain(i, deck.state.autoGainDb, deck.loaded, mixer.get().autoGain);
+      deck.store.subscribe(show);
+      mixer.subscribe(show);
+      show();
+    });
+  }
+
+  private renderAutoGain(index: number, db: number, loaded: boolean, on: boolean): void {
+    const el = this.channels[index]?.autoGain;
+    if (!el) return;
+    const text = !loaded ? 'AUTO --' : `AUTO ${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+    setText(el, on ? text : 'AUTO off');
+    setClass(el, 'is-off', !on);
   }
 
   private buildChannel(id: 'A' | 'B', index: 0 | 1, state: MixerState, actions: Actions): HTMLElement {
@@ -140,6 +163,7 @@ export class MixerView {
       format: (p) => formatDb(centeredDbFromKnob(p, TRIM_MIN_DB, TRIM_MAX_DB)),
       onInput: (p) => actions.trigger(`${m}.trim`, p),
     });
+    const autoGain = h('div', { class: 'autogain-readout', text: 'AUTO --', title: 'Gain applied to this track by AUTO GAIN' });
     const accents: Record<EqBand, string> = {
       high: cssVar('--wave-high', '#e8edf5'),
       mid: cssVar('--wave-mid', '#e39b2d'),
@@ -180,11 +204,12 @@ export class MixerView {
       onInput: (p) => actions.trigger(`${m}.filter`, p),
     });
     filter.el.title = 'Filter: left is low-pass, right is high-pass, centre is off. Double-click resets.';
-    this.channels[index] = { trim, filter, faderDragging, eq, kills, cue, fader, meter };
+    this.channels[index] = { trim, autoGain, filter, faderDragging, eq, kills, cue, fader, meter };
 
     return h('div', { class: `channel-strip channel-${id.toLowerCase()}` }, [
       h('div', { class: 'channel-id', text: id }),
       trim.el,
+      autoGain,
       ...eqRows,
       filter.el,
       cue,
@@ -206,6 +231,7 @@ export class MixerView {
       // Synced unless dragged: a focus guard left the thumb behind after a double-click reset.
       if (!c.faderDragging()) c.fader.value = String(settings.fader);
     });
+    setClass(this.autoGainButton, 'on', state.autoGain);
     this.master.setValue(state.master);
     this.cueVolume.setValue(state.cueVolume);
     if (!this.crossfaderDragging()) this.crossfader.value = String((state.crossfader + 1) / 2);

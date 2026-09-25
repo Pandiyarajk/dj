@@ -92,8 +92,8 @@ export class AudioEngine {
   bindMixer(store: Store<MixerState>): void {
     const apply = (state: MixerState): void => {
       const [gainA, gainB] = crossfaderGains(state.crossfader, state.curve);
-      this.strips[0].apply(state.channels[0], gainA);
-      this.strips[1].apply(state.channels[1], gainB);
+      this.strips[0].apply(state.channels[0], gainA, state.autoGain);
+      this.strips[1].apply(state.channels[1], gainB, state.autoGain);
       const now = this.ctx.currentTime;
       this.masterGain.gain.setTargetAtTime(faderGain(state.master), now, 0.012);
       this.cueBus.gain.setTargetAtTime(faderGain(state.cueVolume), now, 0.012);

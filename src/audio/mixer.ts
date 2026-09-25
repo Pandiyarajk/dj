@@ -2,12 +2,12 @@
  * Mixer state and the per-channel Web Audio strip.
  *
  * Signal path per channel:
- *   deck -> trim -> 3-band isolator -> filter -> fader -> crossfader
+ *   deck -> auto-gain -> trim -> 3-band isolator -> filter -> fader -> crossfader
  *                                            '-> cue tap (pre-fader)
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
- * Modified: Sep-25-2026 (isolator EQ with true kills, one-knob filter)
+ * Modified: Sep-25-2026 (isolator EQ with true kills, one-knob filter, auto-gain)
  */
 import { dbToGain, faderGain, filterFrequencies, type CrossfaderCurve } from './mixer-math';
 
@@ -36,6 +36,8 @@ export interface MixerState {
   /** Headphone cue level, 0..1. */
   cueVolume: number;
   cueMode: CueMode;
+  /** Level each track by its measured loudness. */
+  autoGain: boolean;
 }
 
 /** EQ knob range, dB (Pioneer-style: deep cut, small boost). */
@@ -70,6 +72,7 @@ export function defaultMixer(): MixerState {
     master: 0.8,
     cueVolume: 0.7,
     cueMode: 'off',
+    autoGain: true,
   };
 }
 
@@ -77,7 +80,11 @@ export function defaultMixer(): MixerState {
 const SMOOTHING = 0.012;
 
 export class ChannelStrip {
+  /** Deck input: auto-gain, then trim. */
   readonly input: GainNode;
+  private readonly trim: GainNode;
+  private autoGainDb = 0;
+  private autoGainOn = true;
   /** Post-fader, pre-crossfader tap for the channel meter. */
   readonly analyser: AnalyserNode;
   /** Final output, after the crossfader gain. */
@@ -91,6 +98,8 @@ export class ChannelStrip {
 
   constructor(private readonly ctx: BaseAudioContext) {
     this.input = ctx.createGain();
+    this.trim = ctx.createGain();
+    this.input.connect(this.trim);
     this.fader = ctx.createGain();
     this.output = ctx.createGain();
     this.cueSend = ctx.createGain();
@@ -116,8 +125,8 @@ export class ChannelStrip {
     const sum = ctx.createGain();
     const [lowIn, lowOut] = lr4('lowpass', CROSSOVER_LOW);
     const [restIn, restOut] = lr4('highpass', CROSSOVER_LOW);
-    this.input.connect(lowIn);
-    this.input.connect(restIn);
+    this.trim.connect(lowIn);
+    this.trim.connect(restIn);
     const [apLowIn, apLowOut] = lr4('lowpass', CROSSOVER_HIGH);
     const [apHighIn, apHighOut] = lr4('highpass', CROSSOVER_HIGH);
     lowOut.connect(apLowIn);
@@ -144,9 +153,19 @@ export class ChannelStrip {
     param.setTargetAtTime(value, this.ctx.currentTime, SMOOTHING);
   }
 
+  /** Set the loaded track's auto-gain, dB (applied while auto-gain is on). */
+  setAutoGain(db: number): void {
+    this.autoGainDb = db;
+    this.ramp(this.input.gain, this.autoGainOn ? dbToGain(db) : 1);
+  }
+
   /** Apply channel settings plus this channel's crossfader gain. */
-  apply(settings: ChannelSettings, crossfaderGain: number): void {
-    this.ramp(this.input.gain, dbToGain(settings.trimDb));
+  apply(settings: ChannelSettings, crossfaderGain: number, autoGain = true): void {
+    if (autoGain !== this.autoGainOn) {
+      this.autoGainOn = autoGain;
+      this.setAutoGain(this.autoGainDb);
+    }
+    this.ramp(this.trim.gain, dbToGain(settings.trimDb));
     for (const band of ['low', 'mid', 'high'] as const) {
       this.ramp(this.bands[band].gain, settings.kill[band] ? 0 : dbToGain(settings.eqDb[band]));
     }

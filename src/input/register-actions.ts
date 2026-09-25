@@ -81,5 +81,6 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
   actions.register('mixer.xfader.center', (v) => v > 0 && mixer.set({ crossfader: 0 }));
   actions.register('mixer.xfader.curve', (v) => v > 0 && mixer.set({ curve: mixer.get().curve === 'smooth' ? 'sharp' : 'smooth' }));
   actions.register('mixer.master', (v) => mixer.set({ master: v }));
+  actions.register('mixer.autoGain', (v) => v > 0 && mixer.set({ autoGain: !mixer.get().autoGain }));
   actions.register('mixer.cueVolume', (v) => mixer.set({ cueVolume: v }));
 }

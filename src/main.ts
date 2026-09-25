@@ -194,7 +194,7 @@ async function boot(): Promise<void> {
       } })),
     )
     .filter((v): v is DeckView => v !== null);
-  const mixerView = start('Mixer', () => new MixerView(engine, mixer, actions));
+  const mixerView = start('Mixer', () => new MixerView(engine, mixer, actions, decks));
   const libraryView = start(
     'Library',
     () =>

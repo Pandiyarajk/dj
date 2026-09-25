@@ -8,9 +8,10 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (loop validation, phase-preserving jumps, CDJ-style
  *   hold-to-preview cue and hot-cue gate, auto cue, BPM x2 / /2, seq on
- *   play/pause, loop-aware heard position, on-air lock)
+ *   play/pause, loop-aware heard position, on-air lock, key, auto-gain)
  */
 import { autoCuePoint } from '../analysis/auto-cue';
+import { autoGainDb } from '../analysis/loudness';
 import type { Peaks } from '../analysis/peaks';
 import { Store } from '../state/store';
 import type { AudioEngine } from './engine';
@@ -45,6 +46,12 @@ export interface SavedTrackData {
   bpm: number | null;
   firstBeat: number;
   peaks: Peaks | null;
+  /** Integrated loudness, LUFS (absent on records from before auto-gain). */
+  lufs?: number | null;
+  /** Sample peak, dBFS. */
+  peakDb?: number | null;
+  /** Camelot key code, "8A" (not `key`: that is the cache record's identity). */
+  camelot?: string | null;
   cuePoint: number;
   hotCues: (number | null)[];
 }
@@ -78,6 +85,10 @@ export interface DeckState {
   bend: number;
   bpm: number | null;
   firstBeat: number;
+  /** Camelot key code, or null before analysis or for atonal tracks. */
+  key: string | null;
+  /** Auto-gain for this track, dB (0 until loudness is known). */
+  autoGainDb: number;
   /** 0..1 while analysing, null otherwise. */
   analysis: number | null;
   peaks: Peaks | null;
@@ -111,6 +122,8 @@ function initialState(): DeckState {
     bend: 0,
     bpm: null,
     firstBeat: 0,
+    key: null,
+    autoGainDb: 0,
     analysis: null,
     peaks: null,
     cuePoint: 0,
@@ -136,6 +149,7 @@ export interface SyncHooks {
 export class DeckController {
   readonly store = new Store<DeckState>(initialState());
   syncHooks: SyncHooks | null = null;
+  private readonly strip: ChannelStrip;
   private readonly node: AudioWorkletNode;
   private readonly sampleRate: number;
   private lengthFrames = 0;
@@ -158,6 +172,7 @@ export class DeckController {
       outputChannelCount: [2],
     });
     this.node.connect(strip.input);
+    this.strip = strip;
     this.node.port.onmessage = (event: MessageEvent<DeckReport>) => this.onReport(event.data);
   }
 
@@ -251,6 +266,7 @@ export class DeckController {
       previewing: null,
       bpm,
       firstBeat: saved?.firstBeat ?? 0,
+      key: saved?.camelot ?? null,
       peaks: saved?.peaks ?? null,
       analysis: analysed ? null : 0,
       cuePoint: saved?.cuePoint ?? 0,
@@ -260,17 +276,27 @@ export class DeckController {
       loopIn: null,
       synced: false,
     });
+    this.setLoudness(saved?.lufs ?? null, saved?.peakDb ?? null);
     if (analysed) this.applyAutoCue();
+  }
+
+  /** Level the track by its loudness (see autoGainDb). */
+  private setLoudness(lufs: number | null, peakDb: number | null): void {
+    const db = lufs === null ? 0 : autoGainDb({ lufs, peakDb: peakDb ?? -Infinity });
+    this.store.set({ autoGainDb: db });
+    this.strip.setAutoGain(db);
   }
 
   setAnalysisProgress(fraction: number): void {
     this.store.set({ analysis: fraction, statusText: `Analysing ${Math.round(fraction * 100)}%` });
   }
 
-  setAnalysis(result: { bpm: number | null; firstBeat: number; peaks: Peaks }): void {
+  setAnalysis(result: { bpm: number | null; firstBeat: number; peaks: Peaks; lufs: number | null; peakDb: number | null; key: string | null }): void {
+    this.setLoudness(result.lufs, result.peakDb);
     this.store.set({
       bpm: result.bpm,
       firstBeat: result.firstBeat,
+      key: result.key ?? this.state.key,
       peaks: result.peaks,
       analysis: null,
       statusText: readyText(result.bpm),

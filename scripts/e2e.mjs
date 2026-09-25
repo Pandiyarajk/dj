@@ -198,6 +198,9 @@ try {
     check(`deck ${i ? 'B' : 'A'} BPM and grid`, Math.abs(s.bpm - bpm) <= 0.05 && err <= 0.015, `${s.bpm} BPM, grid off by ${(err * 1000).toFixed(1)} ms`);
   }
 
+  // Key and auto-gain reach the deck and the channel strip.
+  const tonal = await evaluate(`({ key: document.querySelector('.deck-a .key-value').textContent, auto: document.querySelector('.channel-a .autogain-readout').textContent, db: window.dj.decks[0].state.autoGainDb, gain: window.dj.engine.strips[0].input.gain.value })`);
+  check('deck shows a Camelot key and the auto-gain it applied', /^\d{1,2}[AB]$/.test(tonal.key) && /^AUTO [+-]\d+\.\d dB$/.test(tonal.auto) && Math.abs(20 * Math.log10(tonal.gain) - tonal.db) < 0.2, `key ${tonal.key}, ${tonal.auto}, strip ${(20 * Math.log10(tonal.gain)).toFixed(2)} dB`);
   // Play A with a real click: the context unlocks and audio reaches the master bus.
   await click('.deck-a', 'PLAY');
   await sleep(1200);
@@ -212,6 +215,22 @@ try {
   check('audio context running after a click', running === 'running', running);
   check('deck A playhead advances', posA > 0.5 && posA < 2, `${posA.toFixed(2)} s after 1.2 s`);
   check('audio reaches the master bus', peak > 0.05, `peak ${peak.toFixed(3)}`);
+
+  // (Needs the context running: suspended automation does not advance.)
+  // The demo track's peak already sits at -1 dBFS, so its auto-gain is ~0 dB
+  // (the ceiling blocks a boost): use a known -6 dB to prove the switch.
+  await evaluate('window.dj.engine.strips[0].setAutoGain(-6)');
+  await sleep(200);
+  const autoOn = await evaluate('window.dj.engine.strips[0].input.gain.value');
+  await click('.master-strip', 'AUTO GAIN');
+  await sleep(200);
+  const autoOff = await evaluate(`({ gain: window.dj.engine.strips[0].input.gain.value, text: document.querySelector('.channel-a .autogain-readout').textContent })`);
+  await click('.master-strip', 'AUTO GAIN');
+  await sleep(200);
+  const autoBack = await evaluate('window.dj.engine.strips[0].input.gain.value');
+  await evaluate(`window.dj.engine.strips[0].setAutoGain(window.dj.decks[0].state.autoGainDb)`);
+  check('AUTO GAIN switch bypasses and restores the gain stage', Math.abs(autoOn - 0.501) < 0.01 && Math.abs(autoOff.gain - 1) < 1e-3 && autoOff.text === 'AUTO off' && Math.abs(autoBack - 0.501) < 0.01, `on ${autoOn.toFixed(3)}, off ${autoOff.gain.toFixed(3)}, back ${autoBack.toFixed(3)}`);
+
 
   // Sync B to A, then play B: tempo matched and in phase.
   await click('.deck-b', 'SYNC');

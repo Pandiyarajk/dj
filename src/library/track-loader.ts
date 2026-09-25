@@ -175,14 +175,14 @@ export class TrackLoader {
       const saved: SavedTrackData | null = cached && !upToDate ? { ...cached, bpm: null, peaks: null } : cached;
       // Downmix before handing the buffer over, then let the AudioBuffer go:
       // holding it through analysis doubled peak memory on long tracks.
-      const mono = upToDate ? null : downmix(audio);
+      const channels = upToDate ? null : channelCopies(audio);
       const sampleRate = audio.sampleRate;
       deck.load(audio, info, saved);
       after?.();
       audio = null;
-      if (!mono) return;
+      if (!channels) return;
 
-      const result = await this.analyse(deck, mono, sampleRate, token);
+      const result = await this.analyse(deck, channels, sampleRate, token);
       if (!result) return;
       this.saveAnalysis(deck, { ...info, album: tags.album }, result);
     } catch (error) {
@@ -200,27 +200,27 @@ export class TrackLoader {
     if (!this.isCurrent(deck, token)) return;
     try {
       const audio = renderDemo(spec, this.ctx);
-      const mono = downmix(audio);
+      const channels = channelCopies(audio);
       deck.load(audio, { key: `demo:${spec.id}`, title: spec.title, artist: 'Built-in demo', duration: audio.duration }, null);
       after?.();
-      await this.analyse(deck, mono, audio.sampleRate, token);
+      await this.analyse(deck, channels, audio.sampleRate, token);
     } catch (error) {
       if (this.isCurrent(deck, token)) deck.fail(`Could not render demo: ${errorText(error)}`);
     }
   }
 
-  /** Analyse mono PCM (transferred to the worker) and hand the result to the deck; null if superseded. */
-  private async analyse(deck: DeckController, mono: Float32Array, sampleRate: number, token: number): Promise<AnalysisResult | null> {
+  /** Analyse PCM (transferred to the worker) and hand the result to the deck; null if superseded. */
+  private async analyse(deck: DeckController, channels: Float32Array[], sampleRate: number, token: number): Promise<AnalysisResult | null> {
     const client = this.analysers.get(deck);
     if (!client) return null;
     try {
-      const result = await client.analyse(mono, sampleRate, (fraction) => {
+      const result = await client.analyse(channels, sampleRate, (fraction) => {
         if (this.isCurrent(deck, token)) deck.setAnalysisProgress(fraction);
       });
       if (!this.isCurrent(deck, token)) return null;
       deck.setAnalysis(result);
       const row = this.rows.get(deck);
-      if (row) this.library.noteBpm(row, result.bpm);
+      if (row) this.library.noteAnalysis(row, result.bpm, result.key);
       return result;
     } catch (error) {
       if (this.isCurrent(deck, token)) deck.fail(`Analysis failed: ${errorText(error)}`);
@@ -235,7 +235,15 @@ export class TrackLoader {
    */
   private saveAnalysis(deck: DeckController, info: Omit<CachedTrack, keyof SavedTrackData>, result: AnalysisResult): void {
     const s = deck.state;
-    const analysis = { bpm: result.bpm, firstBeat: result.firstBeat, peaks: result.peaks, analysisVersion: ANALYSIS_VERSION };
+    const analysis = {
+      bpm: result.bpm,
+      firstBeat: result.firstBeat,
+      peaks: result.peaks,
+      lufs: result.lufs,
+      peakDb: result.peakDb,
+      camelot: result.key,
+      analysisVersion: ANALYSIS_VERSION,
+    };
     updateTrack(info.key, (existing) =>
       existing ? { ...existing, ...analysis } : { ...info, ...analysis, cuePoint: s.cuePoint, hotCues: s.hotCues },
     ).catch((error) => this.saveFailed(deck, error));
@@ -274,16 +282,11 @@ export class TrackLoader {
   }
 }
 
-/** Average all channels into one. */
-function downmix(audio: AudioBuffer): Float32Array {
-  const mono = new Float32Array(audio.length);
-  for (let c = 0; c < audio.numberOfChannels; c++) {
-    const data = audio.getChannelData(c);
-    for (let i = 0; i < data.length; i++) mono[i] += data[i];
-  }
-  if (audio.numberOfChannels > 1) {
-    const scale = 1 / audio.numberOfChannels;
-    for (let i = 0; i < mono.length; i++) mono[i] *= scale;
-  }
-  return mono;
+/**
+ * Copies of the first two channels, for the worker (which downmixes itself,
+ * after measuring loudness on the real channels).
+ */
+function channelCopies(audio: AudioBuffer): Float32Array[] {
+  const count = Math.min(2, audio.numberOfChannels);
+  return Array.from({ length: count }, (_, c) => audio.getChannelData(c).slice());
 }

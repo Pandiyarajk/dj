@@ -11,7 +11,7 @@ import type { Library, LibraryEntry, LibraryState } from '../library/library';
 import { ENTRY_DRAG_TYPE } from './deck-view';
 import { h, setText } from './dom';
 
-type SortKey = 'title' | 'artist' | 'bpm' | 'duration';
+type SortKey = 'title' | 'artist' | 'bpm' | 'key' | 'duration';
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 /** Rows rendered at most; the rest are reachable by searching. */
 const MAX_ROWS = 500;
@@ -95,6 +95,7 @@ export class LibraryView {
           header('title', 'Title', 'col-title'),
           header('artist', 'Artist', 'col-artist'),
           header('bpm', 'BPM', 'col-num'),
+          header('key', 'Key', 'col-key'),
           header('duration', 'Time', 'col-num'),
           header(null, 'Load', 'col-load'),
         ]),
@@ -159,7 +160,7 @@ export class LibraryView {
 
     if (entries.length === 0) {
       const message = state.entries.length === 0 ? 'No tracks yet: open a folder, add files or drop a file on a deck' : 'No tracks match the search';
-      this.body.replaceChildren(h('tr', { class: 'empty-row' }, [h('td', { text: message, attrs: { colspan: '5' } })]));
+      this.body.replaceChildren(h('tr', { class: 'empty-row' }, [h('td', { text: message, attrs: { colspan: '6' } })]));
     } else {
       const current = this.body.children;
       const unchanged = current.length === rows.length && rows.every((tr, i) => current[i] === tr);
@@ -192,7 +193,7 @@ export class LibraryView {
         attrs: { type: 'button', 'aria-label': `Load ${entry.title} onto deck ${deck}` },
         on: { click: () => this.handlers.load(current(), deck) },
       });
-    const cells = [h('td', { class: 'col-title' }), h('td', { class: 'col-artist' }), h('td', { class: 'col-num' }), h('td', { class: 'col-num' })];
+    const cells = [h('td', { class: 'col-title' }), h('td', { class: 'col-artist' }), h('td', { class: 'col-num' }), h('td', { class: 'col-key' }), h('td', { class: 'col-num' })];
     fillCells(cells, entry);
     const tr = h('tr', { attrs: { draggable: 'true' } }, [...cells, h('td', { class: 'col-load' }, [loadButton('A'), loadButton('B')])]);
     tr.addEventListener('dblclick', () => this.handlers.loadAuto(current()));
@@ -205,10 +206,11 @@ export class LibraryView {
 }
 
 function fillCells(cells: HTMLTableCellElement[], entry: LibraryEntry): void {
-  const [title, artist, bpm, duration] = cells;
+  const [title, artist, bpm, key, duration] = cells;
   setText(title, entry.title);
   title.title = entry.title;
   setText(artist, entry.artist);
   setText(bpm, entry.bpm === null ? '' : entry.bpm.toFixed(1));
+  setText(key, entry.key ?? '');
   setText(duration, entry.duration === null ? '' : formatTime(entry.duration).replace(/\.\d$/, ''));
 }

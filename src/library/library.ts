@@ -23,6 +23,8 @@ export interface LibraryEntry {
   album: string;
   duration: number | null;
   bpm: number | null;
+  /** Camelot key code, from analysis or the file's key tag. */
+  key: string | null;
   /**
    * True once title/artist come from the file's tags (or the cache) rather
    * than a guess from the file name. A guess must never be cached as the tags.
@@ -56,9 +58,9 @@ export class Library {
       .catch(() => undefined);
   }
 
-  /** Update BPM for an entry once a deck has analysed it. */
-  noteBpm(id: string, bpm: number | null): void {
-    const entries = this.store.get().entries.map((e) => (e.id === id ? { ...e, bpm } : e));
+  /** Update BPM and key for an entry once a deck has analysed it. */
+  noteAnalysis(id: string, bpm: number | null, key: string | null): void {
+    const entries = this.store.get().entries.map((e) => (e.id === id ? { ...e, bpm, key: key ?? e.key } : e));
     this.store.set({ entries });
   }
 
@@ -70,6 +72,7 @@ export class Library {
       album: '',
       duration: spec.seconds,
       bpm: spec.bpm,
+      key: null,
       tagsKnown: true,
       source: { kind: 'demo', spec },
     }));
@@ -160,7 +163,7 @@ export class Library {
         const patch = updates.get(e.id);
         // Tags never replace a known value with an unknown one: a deck may have
         // analysed this track's BPM while its tags were still being read.
-        return patch ? { ...e, ...patch, bpm: patch.bpm ?? e.bpm, duration: patch.duration ?? e.duration } : e;
+        return patch ? { ...e, ...patch, bpm: patch.bpm ?? e.bpm, key: patch.key ?? e.key, duration: patch.duration ?? e.duration } : e;
       });
       updates.clear();
       // A superseded job still lands its finished rows, but must not overwrite the current job's status.
@@ -176,10 +179,10 @@ export class Library {
           const file = await entry.source.getFile();
           const cached = await getTrack(trackKey(file)).catch(() => null);
           if (cached) {
-            updates.set(entry.id, { title: cached.title, artist: cached.artist, album: cached.album, duration: cached.duration, bpm: cached.bpm, tagsKnown: true });
+            updates.set(entry.id, { title: cached.title, artist: cached.artist, album: cached.album, duration: cached.duration, bpm: cached.bpm, key: cached.camelot ?? null, tagsKnown: true });
           } else {
             const tags = await readTags(file);
-            updates.set(entry.id, { title: tags.title, artist: tags.artist, album: tags.album, duration: tags.duration, bpm: tags.bpm, tagsKnown: true });
+            updates.set(entry.id, { title: tags.title, artist: tags.artist, album: tags.album, duration: tags.duration, bpm: tags.bpm, key: tags.key, tagsKnown: true });
           }
         } catch {
           // Unreadable file: keep the name-based entry; loading it will report the error.
@@ -200,7 +203,7 @@ export class Library {
 
 function fileEntry(id: string, name: string, getFile: () => Promise<File>): LibraryEntry {
   const tags = tagsFromFileName(name);
-  return { id, title: tags.title, artist: tags.artist, album: '', duration: null, bpm: null, tagsKnown: false, source: { kind: 'file', getFile } };
+  return { id, title: tags.title, artist: tags.artist, album: '', duration: null, bpm: null, key: null, tagsKnown: false, source: { kind: 'file', getFile } };
 }
 
 export function errorText(error: unknown): string {

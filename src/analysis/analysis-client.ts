@@ -12,7 +12,8 @@ import type { Peaks } from './peaks';
 
 export interface AnalysisRequest {
   id: number;
-  samples: Float32Array;
+  /** One array per channel (stereo for loudness); transferred to the worker. */
+  channels: Float32Array[];
   sampleRate: number;
 }
 
@@ -21,6 +22,13 @@ export interface AnalysisResult {
   bpm: number | null;
   firstBeat: number;
   confidence: number;
+  /** Integrated loudness, LUFS; null for silence. */
+  lufs: number | null;
+  /** Sample peak, dBFS. */
+  peakDb: number | null;
+  /** Camelot key code ("8A") and name ("A minor"), or null when atonal. */
+  key: string | null;
+  keyName: string | null;
 }
 
 export type AnalysisResponse =
@@ -85,14 +93,14 @@ export class AnalysisClient {
   /**
    * Analyse mono PCM off the main thread.
    *
-   * @param samples mono samples; the buffer is transferred and unusable afterwards.
+   * @param channels per-channel PCM; the buffers are transferred and unusable afterwards.
    */
-  analyse(samples: Float32Array, sampleRate: number, onProgress: (fraction: number) => void): Promise<AnalysisResult> {
+  analyse(channels: Float32Array[], sampleRate: number, onProgress: (fraction: number) => void): Promise<AnalysisResult> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, onProgress });
-      const request: AnalysisRequest = { id, samples, sampleRate };
-      this.ensureWorker().postMessage(request, [samples.buffer]);
+      const request: AnalysisRequest = { id, channels, sampleRate };
+      this.ensureWorker().postMessage(request, channels.map((c) => c.buffer));
     });
   }
 }
