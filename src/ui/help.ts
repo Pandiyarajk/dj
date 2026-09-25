@@ -11,7 +11,7 @@ export class HelpDialog {
   readonly el: HTMLDialogElement;
 
   constructor() {
-    const groups = ['Deck A', 'Deck B', 'Mixer', 'View'] as const;
+    const groups = ['Deck A', 'Deck B', 'Mixer', 'Library', 'View'] as const;
     const sections = groups.map((group) =>
       h('div', { class: 'help-group' }, [
         h('h3', { text: group }),

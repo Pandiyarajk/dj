@@ -1460,6 +1460,111 @@ input[type='range']::-moz-range-thumb {
   width: 5.5rem;
 }
 
+.library-table .col-delta {
+  width: 4.2rem;
+  text-align: right;
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.library-table .col-delta.near {
+  color: var(--good);
+}
+
+.library-table tbody tr.selected {
+  background: rgba(54, 179, 255, 0.16);
+  box-shadow: inset 3px 0 0 var(--accent-a);
+}
+
+/* Played rows are dimmed, so a repeat is obvious at a glance. */
+.library-table tbody tr.played td {
+  opacity: 0.45;
+}
+
+.library-table tbody tr.played .col-title::after {
+  content: '  played';
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.library-table tbody tr.key-match .col-key {
+  color: #04160d;
+  background: rgba(61, 220, 151, 0.75);
+  border-radius: 4px;
+  text-align: center;
+}
+
+.btn-match.on {
+  background: linear-gradient(180deg, #6cc8ff, var(--accent-a));
+  border-color: #8ad4ff;
+  color: #07090c;
+  box-shadow: 0 0 12px rgba(54, 179, 255, 0.4);
+}
+
+.history {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.history-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.history-note {
+  color: var(--good);
+  font-size: 12px;
+  min-height: 1.2em;
+  margin: 8px 0;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.history-list li {
+  display: grid;
+  grid-template-columns: 4rem 1.5rem minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.history-time,
+.history-meta {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.history-deck {
+  font-weight: 800;
+  font-size: 11px;
+  color: var(--accent-a);
+}
+
+.history-deck-b {
+  color: var(--accent-b);
+}
+
+.history-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-list li.history-empty {
+  display: block;
+  color: var(--text-dim);
+  padding: 16px 4px;
+}
+
 .library-table .col-key {
   width: 3.5rem;
   font-family: var(--font-num);
@@ -1675,8 +1780,9 @@ kbd {
 @media (max-width: 600px) {
   .library-table .col-artist,
   .library-table th.col-artist,
-  .library-table td:nth-child(5),
-  .library-table th:nth-child(5) {
+  .library-table .col-delta,
+  .library-table td:nth-child(6),
+  .library-table th:nth-child(6) {
     display: none;
   }
   .library-table .col-title {

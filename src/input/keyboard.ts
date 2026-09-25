@@ -23,7 +23,7 @@ export interface KeyBinding {
   /** Send 1 on press and 0 on release (pitch bend). */
   hold?: boolean;
   description: string;
-  group: 'Deck A' | 'Deck B' | 'Mixer' | 'View';
+  group: 'Deck A' | 'Deck B' | 'Mixer' | 'View' | 'Library';
 }
 
 function deckKeys(deck: 'A' | 'B', keys: Record<string, string>, cues: string[]): KeyBinding[] {
@@ -62,10 +62,13 @@ export const KEYMAP: KeyBinding[] = [
   ...deckKeys('B', { play: 'P', cue: 'O', sync: 'I', lock: 'Y', loop: 'U', halve: 'H', double: 'J', back: 'N', forward: 'M', slower: 'K', faster: 'L' }, ['7', '8', '9', '0']),
   { code: 'Equal', key: '=', action: 'view.zoom.in', description: 'Zoom waveforms in', group: 'View' },
   { code: 'Minus', key: '-', action: 'view.zoom.out', description: 'Zoom waveforms out', group: 'View' },
-  { code: 'ArrowLeft', key: 'Left', action: 'mixer.xfader.left', description: 'Crossfader towards A', group: 'Mixer' },
-  { code: 'ArrowRight', key: 'Right', action: 'mixer.xfader.right', description: 'Crossfader towards B', group: 'Mixer' },
-  // Shift-only: recentring mid-mix is destructive, and Down alone is a scroll key.
-  { code: 'ArrowDown', key: 'Shift+Down', action: 'mixer.xfader.center', shiftOnly: true, description: 'Centre the crossfader', group: 'Mixer' },
+  { code: 'ArrowLeft', key: 'Left', action: 'mixer.xfader.left', shiftAction: 'library.loadA', description: 'Crossfader towards A (Shift: load selected track onto A)', group: 'Mixer' },
+  { code: 'ArrowRight', key: 'Right', action: 'mixer.xfader.right', shiftAction: 'library.loadB', description: 'Crossfader towards B (Shift: load selected track onto B)', group: 'Mixer' },
+  { code: 'KeyC', key: 'C', action: 'mixer.xfader.center', description: 'Centre the crossfader', group: 'Mixer' },
+  { code: 'Slash', key: '/', action: 'library.search', description: 'Search the library', group: 'Library' },
+  { code: 'ArrowUp', key: 'Up', action: 'library.up', description: 'Select the previous track', group: 'Library' },
+  { code: 'ArrowDown', key: 'Down', action: 'library.down', description: 'Select the next track', group: 'Library' },
+  { code: 'KeyG', key: 'G', action: 'library.match', description: 'Match filter on / off', group: 'Library' },
 ];
 
 /** Keys a focused slider handles itself. */

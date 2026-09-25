@@ -312,14 +312,15 @@ try {
   const kills = await evaluate(`[...document.querySelectorAll('.channel-a .btn-kill')].length`);
   await evaluate(`document.querySelectorAll('.channel-a .btn-kill')[2].scrollIntoView({ block: 'center' })`);
   const killRect = await evaluate(`(() => { const r = document.querySelectorAll('.channel-a .btn-kill')[2].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-  // Below 100 Hz: a 24 dB/octave isolator crossing over at 250 Hz attenuates
-  // less close to the crossover, so bins near it would understate the kill.
-  const lowBefore = await evaluate(lowBandDb('window.dj.engine.strips[0].analyser', 100));
+  // Below 70 Hz (the kick's fundamental): a 24 dB/octave isolator crossing
+  // over at 250 Hz attenuates less closer in, so the 94 Hz bin made a 25 dB
+  // threshold flaky (24.8 to 27.5 dB measured) without the kill changing.
+  const lowBefore = await evaluate(lowBandDb('window.dj.engine.strips[0].analyser', 70));
   for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...killRect, button: 'left', clickCount: 1 });
   check('low kill button toggles the low kill', kills === 3 && (await evaluate('window.dj.mixer.get().channels[0].kill.low')) === true);
   await sleep(200);
-  const lowAfter = await evaluate(lowBandDb('window.dj.engine.strips[0].analyser', 100));
-  check('low kill removes the low band (isolator)', lowBefore - lowAfter > 25, `${lowBefore.toFixed(1)} dB -> ${lowAfter.toFixed(1)} dB below 100 Hz`);
+  const lowAfter = await evaluate(lowBandDb('window.dj.engine.strips[0].analyser', 70));
+  check('low kill removes the low band (isolator)', lowBefore - lowAfter > 30, `${lowBefore.toFixed(1)} dB -> ${lowAfter.toFixed(1)} dB below 70 Hz`);
   await evaluate('document.activeElement && document.activeElement.blur()');
   await key('ArrowLeft', 'ArrowLeft');
   check('Left arrow moves the crossfader towards A', Math.abs((await evaluate('window.dj.mixer.get().crossfader')) + 0.1) < 1e-9);
@@ -530,6 +531,40 @@ try {
   await click('.library-toolbar', 'Analyse library');
   await waitFor(`/already analysed/.test(document.querySelector('.analyse-status').textContent)`, 5000, 'nothing-to-do message');
   check('a second run says there is nothing left to analyse', true, await evaluate(`document.querySelector('.analyse-status').textContent`));
+
+  // ---- library workflow: search scope, Match filter, keyboard loading, history ----
+  const visibleTitles = `[...document.querySelectorAll('.library-table tbody tr:not(.empty-row) .col-title')].map((td) => td.textContent)`;
+  await evaluate(`(() => { const s = document.querySelector('.library-search'); s.value = '132'; s.dispatchEvent(new Event('input')); })()`);
+  await sleep(150);
+  const byBpm = await evaluate(visibleTitles);
+  await evaluate(`(() => { const s = document.querySelector('.library-search'); s.value = ''; s.dispatchEvent(new Event('input')); s.blur(); })()`);
+  check('a number in the search matches BPM', byBpm.length === 1 && byBpm[0] === 'Mid 132', JSON.stringify(byBpm));
+
+  await key('KeyG', 'g');
+  await sleep(150);
+  const matched = await evaluate(`({ titles: ${visibleTitles}, status: document.querySelector('.library-toolbar .library-status:last-child').textContent, delta: [...document.querySelectorAll('.library-table tbody tr')].find((tr) => tr.querySelector('.col-title')?.textContent === 'Demo House 128')?.children[3].textContent })`);
+  await key('KeyG', 'g');
+  check('Match keeps tracks within 6% of the deck on air, with the tempo change', JSON.stringify([...matched.titles].sort()) === JSON.stringify(['Demo House 124', 'Demo House 128']) && matched.delta === '-3.1%', `${JSON.stringify(matched.titles)} "${matched.status}" delta ${matched.delta}`);
+
+  await evaluate(`${deckExpr(1)}.pause()`);
+  await key('Slash', '/');
+  await evaluate(`(() => { const s = document.querySelector('.library-search'); s.value = 'Hiphop'; s.dispatchEvent(new Event('input')); })()`);
+  await sleep(150);
+  await key('ArrowDown', 'ArrowDown');
+  await evaluate('document.activeElement.blur()');
+  await key('ArrowRight', 'ArrowRight', 8);
+  await waitFor(`${deckExpr(1)}.state.track?.title === 'Hiphop 90' && ${deckExpr(1)}.state.status === 'ready'`, 15000, 'keyboard load onto B');
+  check('keyboard: / searches, Down selects, Shift+Right loads onto B', true, 'Hiphop 90 on deck B');
+  await evaluate(`(() => { const s = document.querySelector('.library-search'); s.value = ''; s.dispatchEvent(new Event('input')); })()`);
+
+  await evaluate(`window.dj.history.add({ at: Date.now(), deck: 'A', title: 'Demo House 124', artist: 'Built-in demo', bpm: 124, key: '8A', entryId: 'demo:house-124' })`);
+  await sleep(200);
+  const hist = await evaluate(`({ button: [...document.querySelectorAll('.library-toolbar button')].find((b) => b.textContent.startsWith('History')).textContent, played: [...document.querySelectorAll('.library-table tr')].find((tr) => tr.querySelector('.col-title')?.textContent === 'Demo House 124')?.classList.contains('played') })`);
+  await click('.library-toolbar', hist.button);
+  await click('dialog.history', 'Export CSV');
+  const exported = await evaluate(`document.querySelector('.history-note').textContent`);
+  await evaluate(`document.querySelector('dialog.history').close()`);
+  check('history counts plays, dims played rows and exports', /History \(\d+\)/.test(hist.button) && hist.played === true && /^Exported \d+ track/.test(exported), `${hist.button}, "${exported}"`);
 
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');

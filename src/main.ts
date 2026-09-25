@@ -26,12 +26,14 @@ import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
 import { requestPersistence } from './library/db';
 import { BackgroundAnalyser } from './library/background-analyser';
+import { PLAYED_AFTER, PlayHistory } from './library/history';
 import { TrackLoader } from './library/track-loader';
 import { describeDeck, SessionManager } from './state/session';
 import { Store } from './state/store';
 import { DeckView } from './ui/deck-view';
-import { h, setClass, setText } from './ui/dom';
+import { flash, h, setClass, setText } from './ui/dom';
 import { HelpDialog } from './ui/help';
+import { HistoryDialog } from './ui/history-view';
 import { LibraryView } from './ui/library-view';
 import { MixerView } from './ui/mixer-view';
 import { PhaseMeter } from './ui/phase-meter';
@@ -197,6 +199,16 @@ async function boot(): Promise<void> {
     .filter((v): v is DeckView => v !== null);
   const mixerView = start('Mixer', () => new MixerView(engine, mixer, actions, decks));
   const background = new BackgroundAnalyser(engine.ctx, library, decks);
+  const history = new PlayHistory();
+  void history.load();
+  const historyDialog = new HistoryDialog(history);
+  /** The deck on air: the playing one, or the one the crossfader favours when both play. */
+  const onAir = (): DeckController | null => {
+    const playing = decks.filter((d) => d.state.playing && d.loaded);
+    if (playing.length === 1) return playing[0];
+    if (playing.length === 2) return mixer.get().crossfader <= 0 ? decks[0] : decks[1];
+    return decks.find((d) => d.loaded && d.state.bpm !== null) ?? null;
+  };
   const analyseButton = h('button', { class: 'btn btn-small', text: 'Analyse library', title: 'Find BPM and key for every track in the background (pauses while a deck loads)', attrs: { type: 'button' } });
   analyseButton.addEventListener('click', () => background.toggle());
   const analyseStatus = h('span', { class: 'library-status analyse-status', attrs: { role: 'status' } });
@@ -210,7 +222,12 @@ async function boot(): Promise<void> {
     'Library',
     () =>
       new LibraryView(library, {
-        tools: [analyseButton, analyseStatus],
+        tools: [analyseButton, analyseStatus, historyDialog.button],
+        reference: () => {
+          const deck = onAir();
+          return deck ? { deck: deck.id, bpm: deck.effectiveBpm, key: deck.state.key } : null;
+        },
+        playedIds: () => history.playedIds(),
         load: (entry, id) => load(entry, deckById(id)),
         loadAuto: (entry) => {
           const target = decks.find((d) => !d.loaded) ?? decks.find((d) => !d.state.playing);
@@ -221,7 +238,53 @@ async function boot(): Promise<void> {
   );
 
   const console_ = h('main', { class: 'console' }, [deckViews[0]?.el ?? null, mixerView?.el ?? null, deckViews[1]?.el ?? null]);
-  app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el);
+  app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el, historyDialog.el);
+
+  // The Match filter and key highlights follow the deck on air; played rows dim.
+  for (const deck of decks) deck.store.subscribe((s, p) => (s.playing !== p.playing || s.tempo !== p.tempo || s.key !== p.key || s.bpm !== p.bpm) && libraryView?.refresh());
+  mixer.subscribe((s, p) => s.crossfader !== p.crossfader && libraryView?.refresh());
+  history.store.subscribe(() => libraryView?.refresh());
+
+  // Library keyboard control.
+  actions.register('library.search', (v) => v > 0 && libraryView?.focusSearch());
+  actions.register('library.up', (v) => v > 0 && libraryView?.moveSelection(-1));
+  actions.register('library.down', (v) => v > 0 && libraryView?.moveSelection(1));
+  actions.register('library.loadA', (v) => v > 0 && libraryView?.loadSelected('A'));
+  actions.register('library.loadB', (v) => v > 0 && libraryView?.loadSelected('B'));
+  actions.register('library.match', (v) => v > 0 && libraryView?.toggleMatch());
+
+  // Played history: a track counts once audible (playing, fader up, not
+  // crossfaded out) for PLAYED_AFTER seconds.
+  const audibleFor = new Map<DeckController, { key: string; seconds: number; logged: boolean }>();
+  setInterval(() => {
+    const m = mixer.get();
+    decks.forEach((deck, i) => {
+      const track = deck.state.track;
+      if (!track) return;
+      let entry = audibleFor.get(deck);
+      if (!entry || entry.key !== track.key) audibleFor.set(deck, (entry = { key: track.key, seconds: 0, logged: false }));
+      const xfade = i === 0 ? 1 - m.crossfader : 1 + m.crossfader;
+      const audible = deck.state.playing && m.channels[i].fader > 0.05 && (m.curve === 'sharp' || xfade > 0.1);
+      if (!audible || entry.logged) return;
+      entry.seconds += 1;
+      if (entry.seconds >= PLAYED_AFTER) {
+        entry.logged = true;
+        const source = loader.sourceOf(deck);
+        history.add({
+          at: Date.now(),
+          deck: deck.id,
+          title: track.title,
+          artist: track.artist,
+          bpm: deck.state.bpm,
+          key: deck.state.key,
+          entryId: source && 'entry' in source ? source.entry.id : null,
+        });
+        // Acknowledged on the History button (its count goes up), not on the
+        // deck: the deck's notice line is busy with what the DJ is doing.
+        flash(historyDialog.button);
+      }
+    });
+  }, 1000);
 
   // ---- input ----
   start('Keyboard', () => attachKeyboard(actions, () => help.toggle(), () => help.el.open));
@@ -303,7 +366,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;
