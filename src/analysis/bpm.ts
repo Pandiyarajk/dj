@@ -39,7 +39,11 @@ const FRAME_RATE = 200;
  * the true tempo still lands on every other beat, so its mean ties with the
  * true tempo's; only the strength of the beats it skips tells them apart.
  */
-const DOUBLE_TIME_RATIO = 0.35;
+/** Centre and width (in octaves) of the tempo prior used for the octave choice. */
+const PRIOR_BPM = 135;
+const PRIOR_OCTAVES = 0.75;
+/** Below this beat confidence the track is treated as having no steady beat. */
+const MIN_CONFIDENCE = 0.6;
 /** Seconds of envelope used to rank candidates: long enough to separate them, short enough that a coarse step cannot drift off the beats. */
 const EXCERPT_SECONDS = 40;
 /** Largest drift, in seconds, the final tempo step may cause across the whole track. */
@@ -242,12 +246,34 @@ function subFramePhase(env: Envelope, bpm: number, phase: number, score: number)
   return best;
 }
 
-/** The middle `seconds` of an envelope (all of it when shorter). */
+/**
+ * The `seconds`-long stretch with the most onset energy (all of it when
+ * shorter). The middle of the track is often a beatless breakdown: on the
+ * corpus breakdown track the middle 40 s were 75% beatless.
+ */
 function excerpt(env: Envelope, seconds: number): Envelope {
   const length = Math.round(seconds * env.frameRate);
-  if (env.values.length <= length) return env;
-  const start = Math.floor((env.values.length - length) / 2);
-  return { ...env, values: env.values.subarray(start, start + length) };
+  const values = env.values;
+  if (values.length <= length) return env;
+  const prefix = new Float64Array(values.length + 1);
+  for (let i = 0; i < values.length; i++) prefix[i + 1] = prefix[i] + values[i];
+  const step = Math.max(1, Math.round(env.frameRate * 2));
+  let best = 0;
+  let bestEnergy = -1;
+  for (let start = 0; start + length <= values.length; start += step) {
+    const energy = prefix[start + length] - prefix[start];
+    if (energy > bestEnergy) {
+      bestEnergy = energy;
+      best = start;
+    }
+  }
+  return { ...env, values: values.subarray(best, best + length) };
+}
+
+/** Tempo prior: a log-normal preference around PRIOR_BPM (DJ music clusters there). */
+function prior(bpm: number): number {
+  const octaves = Math.log2(bpm / PRIOR_BPM);
+  return Math.exp(-0.5 * (octaves / PRIOR_OCTAVES) ** 2);
 }
 
 /**
@@ -284,14 +310,14 @@ export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult 
     .map((r) => refine(part, r.bpm, 0.12, 0.01))
     .reduce((top, r) => (r.score > top.score ? r : top));
 
-  // Octave check: a comb at half the true tempo lands on every other beat and
-  // can even out-score it when beats 2 and 4 carry kick plus snare, so the
-  // mean alone cannot decide. Strong off-beats mean the tempo is double.
-  if (best.bpm * 2 < MAX_BPM) {
-    const period = (part.frameRate * 60) / best.bpm;
-    const offBeat = combMean(part.values, period, best.phase + period / 2);
-    if (offBeat > best.score * DOUBLE_TIME_RATIO) best = refine(part, best.bpm * 2, 0.12, 0.01);
-  }
+  // Octave choice: a comb at half the true tempo lands on every other beat
+  // and often out-scores it, and no off-beat threshold separates "half-time
+  // 140" from "90 with eighth-note hats" (same pattern, different tempo).
+  // Weigh each octave's comb score by a tempo prior instead.
+  const octaves = [best.bpm / 2, best.bpm, best.bpm * 2].filter((b) => b >= MIN_BPM && b < MAX_BPM);
+  best = octaves
+    .map((b) => (b === best.bpm ? best : refine(part, b, 0.12, 0.01)))
+    .reduce((top, r) => (r.score * prior(r.bpm) > top.score * prior(top.bpm) ? r : top));
 
   const result = wholeTrackTempo(env, best.bpm);
   let mean = 0;
@@ -299,9 +325,13 @@ export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult 
   mean /= env.values.length;
   if (result.score <= 0 || mean <= 0) return null;
 
-  // Frame f summarises samples [f*hop, (f+1)*hop): report the frame centre.
-  const firstBeat = ((result.phase + 0.5) * env.hop) / sampleRate;
+  // Onset flux peaks at the frame where the energy jump starts: reporting the
+  // frame centre (+half a hop) put every grid 2.0-4.0 ms late on the corpus.
+  const firstBeat = (result.phase * env.hop) / sampleRate;
   const confidence = Math.max(0, Math.min(1, (result.score - mean) / result.score));
+  // Beatless music still gives some comb peak: a real beat stands out far
+  // more (0.84-0.95 on the corpus beat tracks, 0.39 on the ambient one).
+  if (confidence < MIN_CONFIDENCE) return null;
   // Full precision: rounding to 0.01 BPM drifted a synced mix ~12 ms per 5
   // minutes, three times the detector's own budget. Round only for display.
   return { bpm: result.bpm, firstBeat, confidence };

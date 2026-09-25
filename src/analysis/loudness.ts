@@ -106,12 +106,19 @@ export function measureLoudness(channels: Float32Array[], sampleRate: number): L
   if (loud.length === 0) return { lufs: -Infinity, peakDb: peak > 0 ? 20 * Math.log10(peak) : -Infinity };
   const threshold = blockLoudness(loud.reduce((a, b) => a + b, 0) / loud.length) - RELATIVE_GATE;
   const gated = loud.filter((z) => blockLoudness(z) > threshold);
-  const lufs = blockLoudness(gated.reduce((a, b) => a + b, 0) / gated.length);
+  // A mono file plays on both speakers: measure it as dual mono, or it reads
+  // 3 dB quieter than the same mix in stereo and auto-gain over-boosts it.
+  const dualMono = channels.length === 1 ? 10 * Math.log10(2) : 0;
+  const lufs = blockLoudness(gated.reduce((a, b) => a + b, 0) / gated.length) + dualMono;
   return { lufs, peakDb: 20 * Math.log10(peak) };
 }
 
-/** Loudness the auto-gain brings every track to, LUFS (club masters sit around -8). */
-export const AUTO_GAIN_TARGET = -10;
+/**
+ * Loudness auto-gain brings every track to, LUFS. -14 is reachable for normal
+ * masters without boosting peaks past the ceiling; -10 was not, which left
+ * loud and quiet masters 5.2 dB apart on the corpus (1.2 dB at -14).
+ */
+export const AUTO_GAIN_TARGET = -14;
 const MAX_ADJUST_DB = 12;
 /** Boosts stop so the peak stays below this, dBFS: otherwise the limiter pumps. */
 const PEAK_CEILING = -1;

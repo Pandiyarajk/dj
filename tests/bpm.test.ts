@@ -30,7 +30,10 @@ const cases: Array<{ bpm: number; style: PatternStyle; offset: number }> = [
   { bpm: 140, style: 'house', offset: 0.1 },
   { bpm: 150, style: 'house', offset: 0.2 },
   { bpm: 160, style: 'house', offset: 0.05 },
-  { bpm: 180, style: 'house', offset: 0.15 },
+  // Dubstep: half-time feel at 140 must read 140 (the tempo prior decides the
+  // octave). Four-on-the-floor at 180 is left out: it is the same pulse as a
+  // 90 BPM half-time groove, genuinely ambiguous (x2 and /2 cover it).
+  { bpm: 140, style: 'halftime', offset: 0.25 },
   // Hip-hop tempos stay slow. (A four-on-the-floor 85 with off-beat hats is
   // indistinguishable from a 170 pulse; the deck's x2 and /2 buttons cover it.)
   { bpm: 90, style: 'halftime', offset: 0.3 },

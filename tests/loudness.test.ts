@@ -51,13 +51,18 @@ describe('measureLoudness', () => {
 });
 
 describe('autoGainDb', () => {
-  it('turns loud tracks down and quiet ones up, towards -10 LUFS', () => {
-    expect(autoGainDb({ lufs: -6, peakDb: 0 })).toBeCloseTo(-4, 9);
-    expect(autoGainDb({ lufs: -16, peakDb: -12 })).toBeCloseTo(6, 9);
+  it('turns loud tracks down and quiet ones up, towards -14 LUFS', () => {
+    expect(autoGainDb({ lufs: -6, peakDb: 0 })).toBeCloseTo(-8, 9);
+    expect(autoGainDb({ lufs: -20, peakDb: -12 })).toBeCloseTo(6, 9);
+  });
+
+  it('measures a mono file as dual mono (same loudness as the stereo mix)', () => {
+    const tone = sine(1000, -23, 20);
+    expect(measureLoudness([tone], RATE).lufs).toBeCloseTo(measureLoudness([tone, tone], RATE).lufs, 1);
   });
 
   it('never boosts the peak above -1 dBFS, and clamps to +/-12 dB', () => {
-    expect(autoGainDb({ lufs: -16, peakDb: -3 })).toBeCloseTo(2, 9);
+    expect(autoGainDb({ lufs: -20, peakDb: -3 })).toBeCloseTo(2, 9);
     expect(autoGainDb({ lufs: -40, peakDb: -30 })).toBe(12);
     expect(autoGainDb({ lufs: 5, peakDb: 0 })).toBe(-12);
     expect(autoGainDb({ lufs: -Infinity, peakDb: -Infinity })).toBe(0);
