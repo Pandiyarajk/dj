@@ -6,6 +6,7 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (keyboard selection, Match filter with tempo deltas
  *   and key compatibility, played markers, BPM / key / album search)
+ * Modified: Sep-26-2026 (selection cleared on view change)
  */
 import { formatTime } from '../audio/deck-controller';
 import { compatibleKeys } from '../analysis/key';
@@ -134,6 +135,7 @@ export class LibraryView {
       this.crateView = this.crateSelect.value || null;
       if (this.crateView) this.crateTarget = this.crateView;
       this.sort = { key: this.crateView ? 'order' : 'title', ascending: true };
+      this.clearSelection();
       this.queueRender();
     });
     this.crateName.addEventListener('keydown', (event) => {
@@ -150,6 +152,7 @@ export class LibraryView {
         this.crateName.value = '';
         this.crateName.hidden = true;
         this.sort = { key: 'order', ascending: true };
+        this.clearSelection();
       }
       this.queueRender();
     });
@@ -294,9 +297,22 @@ export class LibraryView {
     else this.handlers.loadAuto(entry);
   }
 
-  private select(id: string): void {
+  /**
+   * Forget the selection when the view changes: a row picked in All tracks
+   * (to add it to a crate) otherwise made Auto DJ start the crate from there,
+   * playing only the last track added.
+   */
+  private clearSelection(): void {
     const previous = this.selectedId ? this.rowCache.get(this.selectedId) : undefined;
-    if (previous) setClass(previous.tr, 'selected', false);
+    if (previous) {
+      setClass(previous.tr, 'selected', false);
+      previous.tr.removeAttribute('aria-selected');
+    }
+    this.selectedId = null;
+  }
+
+  private select(id: string): void {
+    this.clearSelection();
     this.selectedId = id;
     const row = this.rowCache.get(id);
     if (row) {

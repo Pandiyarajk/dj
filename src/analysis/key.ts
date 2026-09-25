@@ -8,6 +8,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (relative major/minor decided by the bass tonic)
  */
 import { LowPass } from './filters';
 
@@ -36,6 +37,16 @@ const FFT_SIZE = 4096;
 const HOP = 2048;
 const MIN_HZ = 100;
 const MAX_HZ = 2000;
+/** Bass band for the tonic tie-break, Hz. */
+const BASS_MIN_HZ = 35;
+const BASS_MAX_HZ = 160;
+/**
+ * When the relative major/minor of the winning key scores within this much of
+ * it, the bass decides: the key whose tonic the bass sits on more wins.
+ * Profiles alone read 6 of 7 minor corpus tracks as their relative major,
+ * since both share every note.
+ */
+const RELATIVE_MARGIN = 0.12;
 
 /** In-place iterative radix-2 FFT of (re, im); length must be a power of two. */
 export function fft(re: Float64Array, im: Float64Array): void {
@@ -90,6 +101,11 @@ function pearson(a: number[], b: number[]): number {
 
 /** Average chroma (12 pitch classes, C first) of a mono signal. */
 export function chroma(samples: Float32Array, sampleRate: number): number[] {
+  return chromaBands(samples, sampleRate).chroma;
+}
+
+/** Chroma of the harmony band (100-2000 Hz) and of the bass band (35-160 Hz). */
+export function chromaBands(samples: Float32Array, sampleRate: number): { chroma: number[]; bass: number[] } {
   const factor = Math.max(1, Math.floor(sampleRate / TARGET_RATE));
   const rate = sampleRate / factor;
   // Anti-alias, then decimate, streaming.
@@ -103,21 +119,28 @@ export function chroma(samples: Float32Array, sampleRate: number): number[] {
   // Precompute bin -> (pitch class, weight): weight falls off away from the
   // nearest equal-tempered pitch, so energy between notes counts little.
   const map: Array<[number, number] | null> = [];
+  const bassMap: Array<[number, number] | null> = [];
   for (let k = 0; k < FFT_SIZE / 2; k++) {
     const f = (k * rate) / FFT_SIZE;
-    if (f < MIN_HZ || f > MAX_HZ) {
+    const inHarmony = f >= MIN_HZ && f <= MAX_HZ;
+    const inBass = f >= BASS_MIN_HZ && f <= BASS_MAX_HZ;
+    if (!inHarmony && !inBass) {
       map.push(null);
+      bassMap.push(null);
       continue;
     }
     const pitch = 12 * Math.log2(f / 440) + 69;
     const nearest = Math.round(pitch);
     const off = Math.abs(pitch - nearest);
-    map.push([((nearest % 12) + 12) % 12, Math.cos(Math.PI * off) ** 2]);
+    const entry: [number, number] = [((nearest % 12) + 12) % 12, Math.cos(Math.PI * off) ** 2];
+    map.push(inHarmony ? entry : null);
+    bassMap.push(inBass ? entry : null);
   }
   const window = Float64Array.from({ length: FFT_SIZE }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / FFT_SIZE));
   const re = new Float64Array(FFT_SIZE);
   const im = new Float64Array(FFT_SIZE);
   const total = new Array<number>(12).fill(0);
+  const bassTotal = new Array<number>(12).fill(0);
 
   for (let start = 0; start + FFT_SIZE <= down.length; start += HOP) {
     for (let i = 0; i < FFT_SIZE; i++) {
@@ -126,22 +149,37 @@ export function chroma(samples: Float32Array, sampleRate: number): number[] {
     }
     fft(re, im);
     const frame = new Array<number>(12).fill(0);
+    const bassFrame = new Array<number>(12).fill(0);
     let sum = 0;
+    let bassSum = 0;
     for (let k = 0; k < FFT_SIZE / 2; k++) {
       const m = map[k];
-      if (!m) continue;
+      const b = bassMap[k];
+      if (!m && !b) continue;
       const mag = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
-      frame[m[0]] += mag * m[1];
-      sum += mag * m[1];
+      if (m) {
+        frame[m[0]] += mag * m[1];
+        sum += mag * m[1];
+      }
+      if (b) {
+        bassFrame[b[0]] += mag * b[1];
+        bassSum += mag * b[1];
+      }
     }
     // Normalise per frame, so loud sections do not outvote the rest.
     if (sum > 1e-9) for (let p = 0; p < 12; p++) total[p] += frame[p] / sum;
+    if (bassSum > 1e-9) for (let p = 0; p < 12; p++) bassTotal[p] += bassFrame[p] / bassSum;
   }
-  return total;
+  return { chroma: total, bass: bassTotal };
 }
 
-/** Key from a chroma vector; null when there is no tonal content. */
-export function keyFromChroma(chromaVector: number[]): KeyResult | null {
+/**
+ * Key from a chroma vector; null when there is no tonal content.
+ *
+ * @param bass optional bass-band chroma: when given, it decides between the
+ *   winner and its relative major/minor if their scores are close.
+ */
+export function keyFromChroma(chromaVector: number[], bass?: number[]): KeyResult | null {
   if (chromaVector.every((v) => v === 0)) return null;
   const scores: Array<{ tonic: number; minor: boolean; r: number }> = [];
   for (let tonic = 0; tonic < 12; tonic++) {
@@ -150,7 +188,12 @@ export function keyFromChroma(chromaVector: number[]): KeyResult | null {
     scores.push({ tonic, minor: true, r: pearson(rotated, MINOR) });
   }
   scores.sort((a, b) => b.r - a.r);
-  const [best, next] = scores;
+  let best = scores[0];
+  // The relative key shares every note: minor tonic = major tonic + 9 (A for C).
+  const relativeTonic = (best.tonic + (best.minor ? 3 : 9)) % 12;
+  const relative = scores.find((s) => s.minor !== best.minor && s.tonic === relativeTonic);
+  if (bass && relative && best.r - relative.r < RELATIVE_MARGIN && bass[relative.tonic] > bass[best.tonic]) best = relative;
+  const next = scores.find((s) => s !== best) ?? scores[1];
   const name = `${NOTES[best.tonic]} ${best.minor ? 'minor' : 'major'}`;
   const camelot = `${(best.minor ? CAMELOT_MINOR : CAMELOT_MAJOR)[best.tonic]}${best.minor ? 'A' : 'B'}`;
   return { name, camelot, confidence: Math.max(0, Math.min(1, best.r - next.r)), strength: best.r };
@@ -164,7 +207,8 @@ const MIN_STRENGTH = 0.36;
 
 /** Detect the key of a mono signal; null for silence and for noise-like audio. */
 export function detectKey(samples: Float32Array, sampleRate: number): KeyResult | null {
-  const result = keyFromChroma(chroma(samples, sampleRate));
+  const bands = chromaBands(samples, sampleRate);
+  const result = keyFromChroma(bands.chroma, bands.bass);
   return result && result.strength >= MIN_STRENGTH ? result : null;
 }
 

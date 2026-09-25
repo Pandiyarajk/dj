@@ -5,7 +5,7 @@
  * Date: Sep-25-2026
  */
 import { describe, expect, it } from 'vitest';
-import { compatibleKeys, detectKey, fft } from '../src/analysis/key';
+import { compatibleKeys, detectKey, fft, keyFromChroma } from '../src/analysis/key';
 import { renderPattern } from '../src/demo/synth';
 
 const RATE = 22050;
@@ -92,5 +92,23 @@ describe('compatibleKeys', () => {
     expect(compatibleKeys('12B')).toEqual(['12B', '11B', '1B', '12A']);
     expect(compatibleKeys('1A')).toEqual(['1A', '12A', '2A', '1B']);
     expect(compatibleKeys('x')).toEqual([]);
+  });
+});
+
+describe('relative major/minor tie-break', () => {
+  // The seven notes of C major / A minor with E and A a little stronger: the
+  // profiles alone put C major only 0.05 ahead of A minor.
+  const white = [1, 0, 1, 0, 1.3, 1, 0, 1, 0, 1.3, 0, 1];
+  const bassOn = (pc: number): number[] => Array.from({ length: 12 }, (_, i) => (i === pc ? 1 : 0.1));
+
+  it('picks the key whose tonic the bass sits on', () => {
+    expect(keyFromChroma(white, bassOn(9))?.camelot).toBe('8A');
+    expect(keyFromChroma(white, bassOn(0))?.camelot).toBe('8B');
+  });
+
+  it('does not override a clear winner', () => {
+    // Strong C major (tonic triad weighted): the bass on A must not turn it into A minor.
+    const cMajor = [3, 0, 1, 0, 2, 1, 0, 2.5, 0, 1, 0, 1];
+    expect(keyFromChroma(cMajor, bassOn(9))?.camelot).toBe('8B');
   });
 });

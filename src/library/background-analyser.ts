@@ -7,6 +7,8 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (failures named in the status; tracks with no beat
+ *   or key are not re-analysed on every press)
  */
 import { AnalysisClient } from '../analysis/analysis-client';
 import { HOT_CUE_COUNT, type DeckController } from '../audio/deck-controller';
@@ -26,11 +28,27 @@ export interface BackgroundState {
 
 /** Poll interval while waiting for the decks to go idle, ms. */
 const IDLE_POLL_MS = 400;
+/** Failed tracks named in the status line before "and N more". */
+const NAMED_FAILURES = 2;
+
+/** Status line at the end of a run: how many were analysed, and which could not be read and why. */
+export function summarise(analysed: number, failures: ReadonlyArray<{ title: string; reason: string }>): string {
+  if (failures.length === 0) return `${analysed} analysed`;
+  const named = failures.slice(0, NAMED_FAILURES).map((f) => `"${f.title}" (${f.reason})`);
+  const more = failures.length > NAMED_FAILURES ? ` and ${failures.length - NAMED_FAILURES} more` : '';
+  return `${analysed} analysed, ${failures.length} could not be read: ${named.join(', ')}${more}`;
+}
 
 export class BackgroundAnalyser {
   readonly store = new Store<BackgroundState>({ running: false, status: '', done: 0, total: 0, failed: 0 });
   private readonly client = new AnalysisClient();
   private generation = 0;
+  /**
+   * Rows analysed this session. A beatless or atonal track keeps a null BPM
+   * or key, so the null check alone re-analysed it on every press.
+   */
+  private readonly checked = new Set<string>();
+  private failures: { title: string; reason: string }[] = [];
 
   constructor(
     private readonly ctx: BaseAudioContext,
@@ -65,13 +83,14 @@ export class BackgroundAnalyser {
 
   async run(): Promise<void> {
     const generation = ++this.generation;
-    const pending = this.library.store.get().entries.filter((e) => e.source.kind === 'file' && (e.bpm === null || e.key === null));
+    const pending = this.library.store.get().entries.filter((e) => e.source.kind === 'file' && !this.checked.has(e.id) && (e.bpm === null || e.key === null));
     if (pending.length === 0) {
       // Say so, rather than doing nothing visible.
       this.store.set({ running: false, status: 'Every track is already analysed', done: 0, total: 0, failed: 0 });
       return;
     }
     this.store.set({ running: true, done: 0, total: pending.length, failed: 0, status: `Analysing 0 of ${pending.length}...` });
+    this.failures = [];
 
     for (const entry of pending) {
       if (!(await this.waitForIdleDecks(generation))) return;
@@ -83,7 +102,7 @@ export class BackgroundAnalyser {
       this.store.set({ done: now.done + 1, failed: now.failed + (ok ? 0 : 1) });
     }
     const end = this.store.get();
-    this.store.set({ running: false, status: `${end.done - end.failed} analysed${end.failed ? `, ${end.failed} could not be read` : ''}` });
+    this.store.set({ running: false, status: summarise(end.done - end.failed, this.failures) });
   }
 
   /** Analyse one row and cache it; false if it could not be read or decoded. */
@@ -95,6 +114,7 @@ export class BackgroundAnalyser {
       const cached = await getTrack(key).catch(() => null);
       if (cached && hasCurrentAnalysis(cached)) {
         this.library.noteAnalysis(entry.id, cached.bpm, cached.camelot ?? null);
+        this.checked.add(entry.id);
         return true;
       }
       const audio = await this.ctx.decodeAudioData(await file.arrayBuffer());
@@ -118,9 +138,14 @@ export class BackgroundAnalyser {
           : { key, title: tags.title, artist: tags.artist, album: tags.album, duration: audio.duration, cuePoint: 0, hotCues: new Array(HOT_CUE_COUNT).fill(null), ...analysis },
       );
       this.library.noteAnalysis(entry.id, result.bpm, result.key);
+      this.checked.add(entry.id);
       return true;
     } catch (error) {
-      if (generation === this.generation) console.warn(`Background analysis of "${entry.title}" failed: ${errorText(error)}`);
+      if (generation === this.generation) {
+        // Named in the status line, not only the console: the row itself stays blank.
+        this.failures.push({ title: entry.title, reason: errorText(error) });
+        console.warn(`Background analysis of "${entry.title}" failed: ${errorText(error)}`);
+      }
       return false;
     }
   }

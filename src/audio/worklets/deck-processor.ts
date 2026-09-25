@@ -13,13 +13,15 @@
  * Modified: Sep-25-2026 (loop-wrap crossfade, ramped loop edits, seq on
  *   play/pause/ended, shared buffer for mono tracks, key lock by WSOLA)
  * Modified: Sep-26-2026 (loop crossfade under key lock, crossfaded jumps,
- *   centred grain search, reverse stays in the loop, rate slew)
+ *   centred grain search, reverse stays in the loop, rate slew; two-stage
+ *   +/-12.5 ms grain search so key lock holds bass pitch)
  *
  * Key lock (tempo without pitch change) is WSOLA: the read head still moves
  * at `rate` (so positions, sync and loops are unchanged), and the output is
  * rebuilt from Hann-windowed grains read at normal speed around the head,
  * each placed where it best continues the previous grain. The search is
- * kept to +/-2.7 ms so kicks do not flam against the other deck.
+ * two-stage: +/-12.5 ms on a 4x-decimated signal (long enough to line up a
+ * 40 Hz bass period), then +/-3 frames at full rate.
  */
 
 // AudioWorkletGlobalScope declarations. `declare` inside a module is
@@ -86,9 +88,19 @@ interface PendingSeek {
 /** WSOLA grain length and hop (50% overlap: Hann windows sum to exactly 1). */
 const GRAIN = 1024;
 const HOP = GRAIN / 2;
-/** Search range for the best grain placement, frames (about 2.7 ms at 48 kHz). */
-const SEARCH = 128;
-/** Frames compared when scoring a placement (every second one). */
+/**
+ * Coarse search range for the best grain placement, frames (12.5 ms at 48 kHz).
+ * It must cover half the longest bass period (40 Hz, 600 frames): at +/-2.7 ms everything below
+ * about 150 Hz could not be aligned and was simply resampled, so with key
+ * lock on the bass still moved a semitone at +6%.
+ */
+const SEARCH = 600;
+/** Coarse search step and decimation factor. */
+const DECIMATE = 4;
+/** Frames compared by the coarse search: one grain's worth, to span a bass period. */
+const COARSE_COMPARE = 1024;
+/** Fine search range around the coarse winner, and frames it compares (every second one). */
+const REFINE = 3;
 const COMPARE = 256;
 /**
  * Score cost of the search edge relative to the target, so ties and near-ties
@@ -97,6 +109,14 @@ const COMPARE = 256;
  * drifted the placement to the edge of the search at every hop.
  */
 const DRIFT_PENALTY = 0.15;
+/**
+ * How far ahead of the head grains are centred, per unit of rate change,
+ * frames. The search follows the natural continuation of the previous grain,
+ * which trails the head when faster and leads it when slower, so kicks landed
+ * 2 ms late at +6% and 4.5 ms late at +16% (early when slower). Centring the
+ * search this far ahead cancels it: measured under 1.6 ms at 0.92 to 1.16.
+ */
+const LEAD = 1200;
 /** Reference energy below which there is nothing to match: place at the head. */
 const SILENCE = 1e-7;
 const WINDOW = Float32Array.from({ length: GRAIN }, (_, n) => 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / GRAIN));
@@ -126,8 +146,10 @@ class DeckProcessor extends AudioWorkletProcessor {
   private blockPos = HOP;
   /** Start of the previous grain, or -1 after a reset (nothing to continue). */
   private prevStart = -1;
-  private readonly searchBuf = new Float32Array(2 * SEARCH + COMPARE);
-  private readonly refBuf = new Float32Array(COMPARE / 2);
+  private readonly coarseRef = new Float32Array(COARSE_COMPARE / DECIMATE);
+  private readonly coarseSearch = new Float32Array((2 * SEARCH + COARSE_COMPARE) / DECIMATE);
+  private readonly fineRef = new Float32Array(COMPARE / 2);
+  private readonly fineSearch = new Float32Array(2 * REFINE + COMPARE);
   // Jump crossfade: the old read position fades out while the new one fades in.
   private fadeFrom = 0;
   private fadeStep = 1;
@@ -262,48 +284,77 @@ class DeckProcessor extends AudioWorkletProcessor {
     return frame >= 0 && frame < this.length ? data[frame] : 0;
   }
 
+  /** Mono sum of frames [from, from + count), for the decimated search. */
+  private monoSum(left: Float32Array, right: Float32Array, from: number, count: number): number {
+    let sum = 0;
+    for (let i = from; i < from + count; i++) sum += this.at(left, i) + this.at(right, i);
+    return sum;
+  }
+
+  /**
+   * Best placement offset in `search` for `ref`: `count` candidates `step`
+   * frames apart, centred on `centre` (the offset of candidate index
+   * (count - 1) / 2). Scored by normalised correlation, minus a small cost for
+   * distance from the head; searched outward so ties keep the closest.
+   */
+  private static bestOffset(ref: Float32Array, refEnergy: number, search: Float32Array, stride: number, count: number, step: number, centre: number): number {
+    const middle = (count - 1) >> 1;
+    let best = -Infinity;
+    let bestOffset = centre;
+    for (let d = 0; d < count; d++) {
+      const c = middle + (d & 1 ? (d + 1) >> 1 : -(d >> 1));
+      if (c < 0 || c >= count) continue;
+      let dot = 0;
+      let energy = 0;
+      for (let j = 0; j < ref.length; j++) {
+        const b = search[c + j * stride];
+        dot += ref[j] * b;
+        energy += b * b;
+      }
+      const offset = centre + (c - middle) * step;
+      const score = (energy > 0 ? dot / Math.sqrt(energy * refEnergy) : 0) - (DRIFT_PENALTY * Math.abs(offset)) / SEARCH;
+      if (score > best) {
+        best = score;
+        bestOffset = offset;
+      }
+    }
+    return bestOffset;
+  }
+
   /**
    * Next WSOLA block: a grain read at normal speed around the head, placed
    * (within +/-SEARCH) where it best continues the previous grain, and
    * overlap-added with that grain's second half.
    */
   private nextBlock(left: Float32Array, right: Float32Array): void {
-    const target = Math.round(this.head);
+    const target = Math.round(this.head + (this.rate - 1) * LEAD);
     let start = target;
     const fresh = this.prevStart < 0;
     if (!fresh) {
-      // Copy the reference and the search region to mono buffers once: the
-      // scoring loop below then runs on plain arrays (it was 4 folded reads
-      // per multiply, about 1 ms of audio-thread time per block).
+      // The reference and search regions are copied to mono buffers once, so
+      // the scoring loops run on plain arrays rather than folded reads.
       const natural = this.prevStart + HOP;
-      let refEnergy = 0;
-      for (let j = 0; j < COMPARE; j += 2) {
-        const a = this.at(left, natural + j) + this.at(right, natural + j);
-        this.refBuf[j >> 1] = a;
-        refEnergy += a * a;
+      // Coarse: sums of DECIMATE frames (a crude low-pass that keeps the bass).
+      let coarseEnergy = 0;
+      for (let k = 0; k < this.coarseRef.length; k++) {
+        const a = this.monoSum(left, right, natural + k * DECIMATE, DECIMATE);
+        this.coarseRef[k] = a;
+        coarseEnergy += a * a;
       }
-      if (refEnergy > SILENCE) {
+      if (coarseEnergy > SILENCE) {
         const base = target - SEARCH;
-        const search = this.searchBuf;
-        for (let k = 0; k < search.length; k++) search[k] = this.at(left, base + k) + this.at(right, base + k);
-        let best = -Infinity;
-        // Outward from the head (0, +1, -1, +2, ...), so ties keep the closest.
-        for (let d = 0; d <= 2 * SEARCH; d++) {
-          const offset = d & 1 ? (d + 1) >> 1 : -(d >> 1);
-          const c = offset + SEARCH;
-          let dot = 0;
-          let energy = 0;
-          for (let j = 0; j < COMPARE; j += 2) {
-            const b = search[c + j];
-            dot += this.refBuf[j >> 1] * b;
-            energy += b * b;
-          }
-          const score = (energy > 0 ? dot / Math.sqrt(energy * refEnergy) : 0) - (DRIFT_PENALTY * Math.abs(offset)) / SEARCH;
-          if (score > best) {
-            best = score;
-            start = target + offset;
-          }
+        for (let k = 0; k < this.coarseSearch.length; k++) this.coarseSearch[k] = this.monoSum(left, right, base + k * DECIMATE, DECIMATE);
+        const coarse = DeckProcessor.bestOffset(this.coarseRef, coarseEnergy, this.coarseSearch, 1, (2 * SEARCH) / DECIMATE + 1, DECIMATE, 0);
+        // Fine: +/-REFINE frames at full rate around the coarse winner.
+        let fineEnergy = 0;
+        for (let j = 0; j < COMPARE; j += 2) {
+          const a = this.at(left, natural + j) + this.at(right, natural + j);
+          this.fineRef[j >> 1] = a;
+          fineEnergy += a * a;
         }
+        const fineBase = target + coarse - REFINE;
+        for (let k = 0; k < this.fineSearch.length; k++) this.fineSearch[k] = this.at(left, fineBase + k) + this.at(right, fineBase + k);
+        start = target + (fineEnergy > SILENCE ? DeckProcessor.bestOffset(this.fineRef, fineEnergy, this.fineSearch, 2, 2 * REFINE + 1, 1, coarse) : coarse);
       }
     }
     for (let j = 0; j < HOP; j++) {

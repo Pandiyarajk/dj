@@ -6,6 +6,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  CEILING_RANGE,
+  ceilingCurve,
   centeredDbFromKnob,
   crossfaderGains,
   dbToGain,
@@ -92,5 +94,29 @@ describe('centre-detented knob mapping', () => {
     for (let p = 0; p <= 1.0001; p += 0.05) {
       expect(knobFromCenteredDb(centeredDbFromKnob(p, -26, 6), -26, 6)).toBeCloseTo(Math.min(1, p), 9);
     }
+  });
+});
+
+describe('output ceiling curve', () => {
+  const curve = ceilingCurve();
+  /** The curve as the WaveShaper applies it: input scaled by 1/CEILING_RANGE, clamped to the ends. */
+  const shape = (x: number): number => {
+    const u = Math.max(-1, Math.min(1, x / CEILING_RANGE));
+    const pos = ((u + 1) / 2) * (curve.length - 1);
+    const i = Math.min(curve.length - 2, Math.floor(pos));
+    return curve[i] + (curve[i + 1] - curve[i]) * (pos - i);
+  };
+
+  it('is transparent below the knee', () => {
+    for (const x of [0, 0.1, -0.5, 0.85]) expect(shape(x)).toBeCloseTo(x, 3);
+  });
+
+  it('never exceeds the ceiling, even far above full scale', () => {
+    const ceiling = dbToGain(-0.2);
+    for (const x of [1, 1.07, 1.5, 3, -1.07, -10]) expect(Math.abs(shape(x))).toBeLessThanOrEqual(ceiling + 1e-6);
+  });
+
+  it('rises monotonically', () => {
+    for (let i = 1; i < curve.length; i++) expect(curve[i]).toBeGreaterThanOrEqual(curve[i - 1]);
   });
 });

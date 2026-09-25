@@ -5,12 +5,13 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (cue-bus limiter, gain-reduction reading, click-free re-route)
+ * Modified: Sep-26-2026 (soft-knee ceiling after both limiters)
  */
 import deckProcessorUrl from './worklets/deck-processor.ts?worker&url';
 import recorderProcessorUrl from './worklets/recorder-processor.ts?worker&url';
 import { MixRecorder } from './recorder';
 import { ChannelStrip, type CueMode, type MixerState } from './mixer';
-import { crossfaderGains, faderGain } from './mixer-math';
+import { CEILING_RANGE, ceilingCurve, crossfaderGains, faderGain } from './mixer-math';
 import type { Store } from '../state/store';
 
 export interface MeterReading {
@@ -18,6 +19,18 @@ export interface MeterReading {
   peak: number;
   /** RMS level over the same window. */
   rms: number;
+}
+
+/**
+ * A hard output ceiling (-0.2 dBFS, soft knee from -1 dBFS) for after a
+ * limiter, whose 1 ms attack still lets the front of a transient through.
+ * Returns [input, output] of the chain.
+ */
+function ceiling(ctx: BaseAudioContext): [AudioNode, AudioNode] {
+  const scale = new GainNode(ctx, { gain: 1 / CEILING_RANGE });
+  const shaper = new WaveShaperNode(ctx, { curve: ceilingCurve(), oversample: '4x' });
+  scale.connect(shaper);
+  return [scale, shaper];
 }
 
 export class AudioEngine {
@@ -43,14 +56,14 @@ export class AudioEngine {
     this.strips = [new ChannelStrip(ctx), new ChannelStrip(ctx)];
     this.masterGain = ctx.createGain();
     // Safety limiter: two full-scale decks summed would otherwise clip.
-    this.limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+    this.limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.001, release: 0.1 });
     this.masterOut = ctx.createGain();
     this.masterAnalyser = ctx.createAnalyser();
     this.masterAnalyser.fftSize = 1024;
     this.cueBus = ctx.createGain();
     // The cue bus is pre-fader with up to +12 dB of trim: limit it too, or two
     // cued hot tracks clip hard in the headphones.
-    const cueLimiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+    const cueLimiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.001, release: 0.1 });
     this.masterFade = ctx.createGain();
     this.cueFade = ctx.createGain();
     this.cueMixCue = ctx.createGain();
@@ -61,12 +74,16 @@ export class AudioEngine {
       strip.output.connect(this.masterGain);
       strip.cueSend.connect(this.cueBus);
     }
-    this.masterGain.connect(this.limiter).connect(this.masterOut);
+    const [masterCeiling, masterCeilingOut] = ceiling(ctx);
+    this.masterGain.connect(this.limiter).connect(masterCeiling);
+    masterCeilingOut.connect(this.masterOut);
     this.masterOut.connect(this.masterAnalyser);
     this.masterOut.connect(this.masterFade);
     // Headphones: cue bus (limited) blended with master by CUE MIX, then the
     // headphone level, then the output routing.
-    this.cueBus.connect(cueLimiter).connect(this.cueMixCue).connect(this.headphoneLevel);
+    const [cueCeiling, cueCeilingOut] = ceiling(ctx);
+    this.cueBus.connect(cueLimiter).connect(cueCeiling);
+    cueCeilingOut.connect(this.cueMixCue).connect(this.headphoneLevel);
     this.masterOut.connect(this.cueMixMaster).connect(this.headphoneLevel);
     this.headphoneLevel.connect(this.cueFade);
   }

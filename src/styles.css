@@ -6,6 +6,8 @@
  *   states, custom faders with scale marks, segmented meters, transport
  *   icons, LCD readouts; hot-cue colours, track-end warning, limiter LED,
  *   phase meter, zoom, tablet and phone layouts, reduced-motion feedback)
+ * Modified: Sep-26-2026 (library load and +/- columns no longer clip; top
+ *   bar wraps on phones instead of scrolling the page sideways)
  *
  * System fonts only: the app makes no network requests, so a font CDN would
  * break the "your music stays on your machine" promise.
@@ -290,8 +292,11 @@ th.sortable:focus-visible {
 .topbar-right {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .btn-rec {
@@ -1683,7 +1688,7 @@ input[type='range']::-moz-range-thumb {
 }
 
 .library-table .col-delta {
-  width: 4.2rem;
+  width: 5.2rem;
   text-align: right;
   font-family: var(--font-num);
   font-size: 12px;
@@ -1829,8 +1834,11 @@ input[type='range']::-moz-range-thumb {
 }
 
 .library-table .col-load {
-  width: 7.6rem;
+  width: 8.6rem;
   text-align: right;
+  /* Buttons, not text: an ellipsis here painted the B button as "..." */
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .btn-load {
@@ -2110,6 +2118,10 @@ kbd {
 }
 
 @media (max-width: 600px) {
+  .topbar-right {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
   .library-table .col-artist,
   .library-table th.col-artist,
   .library-table .col-delta,

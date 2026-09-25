@@ -10,6 +10,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (auto-gain strip check reads the gain after the context runs)
  *
  *   node scripts/e2e.mjs [base-url] [--shot out.png]
  *   (serve first: npm run build && npm run preview)
@@ -210,9 +211,6 @@ try {
   const swScope = await evaluate(`(async () => { for (let i = 0; i < 20; i++) { const r = await navigator.serviceWorker.getRegistration(); if (r) return r.scope; await new Promise((res) => setTimeout(res, 200)); } return null; })()`);
   check('service worker registers for offline use', typeof swScope === 'string' && swScope.startsWith('http'), String(swScope));
 
-  // Key and auto-gain reach the deck and the channel strip.
-  const tonal = await evaluate(`({ key: document.querySelector('.deck-a .key-value').textContent, auto: document.querySelector('.channel-a .autogain-readout').textContent, db: window.dj.decks[0].state.autoGainDb, gain: window.dj.engine.strips[0].input.gain.value })`);
-  check('deck shows a Camelot key and the auto-gain it applied', /^\d{1,2}[AB]$/.test(tonal.key) && /^AUTO [+-]\d+\.\d dB$/.test(tonal.auto) && Math.abs(20 * Math.log10(tonal.gain) - tonal.db) < 0.2, `key ${tonal.key}, ${tonal.auto}, strip ${(20 * Math.log10(tonal.gain)).toFixed(2)} dB`);
   // Play A with a real click: the context unlocks and audio reaches the master bus.
   await click('.deck-a', 'PLAY');
   await sleep(1200);
@@ -227,6 +225,12 @@ try {
   check('audio context running after a click', running === 'running', running);
   check('deck A playhead advances', posA > 0.5 && posA < 2, `${posA.toFixed(2)} s after 1.2 s`);
   check('audio reaches the master bus', peak > 0.05, `peak ${peak.toFixed(3)}`);
+
+  // Key and auto-gain reach the deck and the channel strip. Read only once the
+  // context runs: a gain ramp does not advance while it is suspended, so this
+  // passed only by luck while the demo track's auto-gain was near 0 dB.
+  const tonal = await evaluate(`({ key: document.querySelector('.deck-a .key-value').textContent, auto: document.querySelector('.channel-a .autogain-readout').textContent, db: window.dj.decks[0].state.autoGainDb, gain: window.dj.engine.strips[0].input.gain.value })`);
+  check('deck shows a Camelot key and the auto-gain it applied', /^\d{1,2}[AB]$/.test(tonal.key) && /^AUTO [+-]\d+\.\d dB$/.test(tonal.auto) && Math.abs(20 * Math.log10(tonal.gain) - tonal.db) < 0.2, `key ${tonal.key}, ${tonal.auto}, strip ${(20 * Math.log10(tonal.gain)).toFixed(2)} dB`);
 
   // Effects: tempo-synced echo, a tail that rings out, type cycling.
   const masterPeak = `(async () => { let p = 0; for (let i = 0; i < 8; i++) { p = Math.max(p, window.dj.engine.meter(window.dj.engine.masterAnalyser).peak); await new Promise((r) => setTimeout(r, 40)); } return p; })()`;

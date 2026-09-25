@@ -5,6 +5,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (output ceiling curve)
  */
 
 export type CrossfaderCurve = 'smooth' | 'sharp';
@@ -98,4 +99,28 @@ export function filterFrequencies(position: number): FilterSetting {
   const amount = (Math.abs(p) - FILTER_DEAD_ZONE) / (1 - FILTER_DEAD_ZONE);
   if (p < 0) return { lowpass: 20000 * Math.pow(150 / 20000, amount), highpass: FILTER_OPEN_HIGH };
   return { lowpass: FILTER_OPEN_LOW, highpass: 20 * Math.pow(6000 / 20, amount) };
+}
+
+/** Input range the ceiling curve covers: a WaveShaper clamps beyond +/-1, so the input is scaled by 1/CEILING_RANGE first. */
+export const CEILING_RANGE = 2;
+
+/**
+ * WaveShaper curve for the output ceiling after the limiter: linear up to
+ * `kneeDb`, then bending smoothly (tanh) towards `ceilingDb`, which it never
+ * exceeds. The limiter alone let fast transients through: two loud synced
+ * decks peaked at +0.55 dBFS.
+ *
+ * The curve's input is the signal divided by CEILING_RANGE, so it covers
+ * +/-2 (+6 dBFS) before the WaveShaper's own clamp applies.
+ *
+ * @param points curve length (odd, so 0 maps exactly to 0).
+ */
+export function ceilingCurve(kneeDb = -1, ceilingDb = -0.2, points = 4097): Float32Array {
+  const knee = dbToGain(kneeDb);
+  const room = dbToGain(ceilingDb) - knee;
+  return Float32Array.from({ length: points }, (_, i) => {
+    const x = ((i / (points - 1)) * 2 - 1) * CEILING_RANGE;
+    const size = Math.abs(x);
+    return size <= knee ? x : Math.sign(x) * (knee + room * Math.tanh((size - knee) / room));
+  });
 }

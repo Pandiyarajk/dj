@@ -84,3 +84,60 @@ describe('key lock', () => {
     expect(Math.abs(frequency(left, RATE, RATE * 3) - 440) / 440).toBeLessThan(0.015);
   });
 });
+
+describe('key lock bass and timing', () => {
+  it('holds bass pitch (45-90 Hz) as well as the mids', async () => {
+    for (const f of [45, 60, 90]) {
+      for (const rate of [0.92, 1.06, 1.16]) {
+        const deck = await deckProcessor(RATE);
+        const tone = Float32Array.from({ length: RATE * 6 }, (_, i) => 0.5 * Math.sin((2 * Math.PI * f * i) / RATE));
+        deck.send({ type: 'load', left: tone, right: tone.slice() });
+        deck.send({ type: 'rate', rate });
+        deck.send({ type: 'keyLock', on: true });
+        deck.send({ type: 'play', seq: 1 });
+        const [left] = deck.render(RATE * 4);
+        // One zero crossing over 3 s is 1/135 at 45 Hz: allow two.
+        expect(Math.abs(frequency(left, RATE, RATE * 4) - f)).toBeLessThanOrEqual(2 / 3 + 1e-9);
+      }
+    }
+  });
+
+  it('keeps kicks within 2 ms of the head at 0.92 to 1.16', async () => {
+    const kicks = new Float32Array(RATE * 12);
+    const beats: number[] = [];
+    for (let s = 0.5; s < 11.5; s += 0.4839) {
+      const at = Math.round(s * RATE);
+      beats.push(at);
+      let phase = 0;
+      for (let i = 0; i < RATE / 4; i++) {
+        const t = i / RATE;
+        phase += (2 * Math.PI * (50 + 100 * Math.exp(-t * 30))) / RATE;
+        kicks[at + i] += 0.8 * Math.exp(-t * 12) * Math.sin(phase);
+      }
+    }
+    for (let i = 0; i < kicks.length; i++) kicks[i] += 0.05 * Math.sin((2 * Math.PI * 440 * i) / RATE);
+    for (const rate of [0.92, 1.06, 1.16]) {
+      const deck = await deckProcessor(RATE);
+      deck.send({ type: 'load', left: kicks, right: kicks.slice() });
+      deck.send({ type: 'rate', rate });
+      deck.send({ type: 'keyLock', on: true });
+      deck.send({ type: 'play', seq: 1 });
+      const [left] = deck.render(Math.floor(RATE * 9.5));
+      const errors: number[] = [];
+      for (const beat of beats) {
+        const expected = beat / rate;
+        if (expected < RATE || expected > RATE * 9) continue;
+        let onset = expected + 1500;
+        for (let i = Math.floor(expected - 1500); i < expected + 1500; i++) {
+          if (Math.abs(left[i]) > 0.3) {
+            onset = i;
+            break;
+          }
+        }
+        errors.push(((onset - expected) / RATE) * 1000);
+      }
+      errors.sort((a, b) => a - b);
+      expect(Math.abs(errors[errors.length >> 1])).toBeLessThan(2);
+    }
+  });
+});
