@@ -148,7 +148,11 @@ export class AudioEngine {
       const mix = Math.max(0, Math.min(1, state.cueMix ?? 0));
       this.cueMixCue.gain.setTargetAtTime(Math.cos((mix * Math.PI) / 2), now, 0.012);
       this.cueMixMaster.gain.setTargetAtTime(Math.sin((mix * Math.PI) / 2), now, 0.012);
-      if (state.cueMode !== this.cueMode) this.reroute(state.cueMode === 'quad' && !this.supportsQuad ? 'off' : state.cueMode);
+      // Compare the mode that will actually be used: 'quad' on a 2-output device
+      // falls back to 'off', and comparing the raw value re-routed (dropping
+      // the master for 30 ms) on every mixer change.
+      const wanted = state.cueMode === 'quad' && !this.supportsQuad ? 'off' : state.cueMode;
+      if (wanted !== this.cueMode) this.reroute(wanted);
     };
     apply(store.get());
     store.subscribe(apply);

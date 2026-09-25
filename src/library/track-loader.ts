@@ -12,7 +12,7 @@
 import { AnalysisClient, type AnalysisResult } from '../analysis/analysis-client';
 import { formatTime, type DeckController, type SavedTrackData, type TrackInfo } from '../audio/deck-controller';
 import { renderDemo } from '../demo/demo-tracks';
-import { ANALYSIS_VERSION, getTrack, hasCurrentAnalysis, patchTrack, trackKey, updateTrack, type CachedTrack } from './db';
+import { ANALYSIS_VERSION, getTrack, hasCurrentAnalysis, trackKey, updateTrack, type CachedTrack } from './db';
 import { errorText, type Library, type LibraryEntry } from './library';
 import { readTags } from './metadata';
 
@@ -38,10 +38,10 @@ interface PreviousLoad {
 const SAVE_DEBOUNCE_MS = 800;
 
 interface PendingCues {
-  cuePoint: number;
-  hotCues: (number | null)[];
-  bpm: number | null;
-  firstBeat: number;
+  /** Only the fields and slots that changed, so two decks never overwrite each other. */
+  cuePoint?: number;
+  slots: Map<number, number | null>;
+  grid?: { bpm: number | null; firstBeat: number };
   deck: DeckController;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -63,7 +63,7 @@ export class TrackLoader {
   constructor(
     private readonly ctx: BaseAudioContext,
     private readonly library: Library,
-    decks: DeckController[],
+    private readonly decks: DeckController[],
   ) {
     for (const deck of decks) {
       this.analysers.set(deck, new AnalysisClient());
@@ -271,8 +271,22 @@ export class TrackLoader {
       }
       const pending = this.pendingCues.get(track.key);
       if (pending) clearTimeout(pending.timer);
-      const timer = setTimeout(() => this.writeCues(track.key), SAVE_DEBOUNCE_MS);
-      this.pendingCues.set(track.key, { cuePoint: state.cuePoint, hotCues: state.hotCues, bpm: state.bpm, firstBeat: state.firstBeat, deck, timer });
+      const next: PendingCues = { ...(pending ?? { slots: new Map() }), deck, timer: setTimeout(() => this.writeCues(track.key), SAVE_DEBOUNCE_MS) };
+      if (state.cuePoint !== previous.cuePoint) next.cuePoint = state.cuePoint;
+      if (gridEdit) next.grid = { bpm: state.bpm, firstBeat: state.firstBeat };
+      state.hotCues.forEach((cue, i) => {
+        if (cue === previous.hotCues[i]) return;
+        next.slots.set(i, cue);
+        // The same track on the other deck shows the same cues.
+        for (const other of this.decks) {
+          if (other !== deck && other.state.track?.key === track.key && other.state.hotCues[i] !== cue) {
+            const mirrored = other.state.hotCues.slice();
+            mirrored[i] = cue;
+            other.store.set({ hotCues: mirrored });
+          }
+        }
+      });
+      this.pendingCues.set(track.key, next);
     });
   }
 
@@ -281,7 +295,19 @@ export class TrackLoader {
     if (!pending) return;
     this.pendingCues.delete(key);
     clearTimeout(pending.timer);
-    patchTrack(key, { cuePoint: pending.cuePoint, hotCues: pending.hotCues, bpm: pending.bpm, firstBeat: pending.firstBeat }).catch((error) => this.saveFailed(pending.deck, error));
+    // Merge inside one transaction: only the slots that changed are written,
+    // so cues set on the other deck (same track) are never overwritten.
+    updateTrack(key, (existing) => {
+      if (!existing) return null;
+      const hotCues = existing.hotCues.slice();
+      for (const [slot, cue] of pending.slots) hotCues[slot] = cue;
+      return {
+        ...existing,
+        hotCues,
+        ...(pending.cuePoint !== undefined ? { cuePoint: pending.cuePoint } : {}),
+        ...(pending.grid ?? {}),
+      };
+    }).catch((error) => this.saveFailed(pending.deck, error));
   }
 
   /** Write every pending cue edit now (page hidden or closing). */

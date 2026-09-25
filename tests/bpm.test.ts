@@ -70,6 +70,16 @@ describe('detectBpm', () => {
     }, 60000);
   }
 
+  it('returns null for noise, DC, steady tones (no real onsets)', () => {
+    const n = SAMPLE_RATE * 20;
+    let seed = 1;
+    const noise = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    expect(detectBpm(Float32Array.from({ length: n }, () => noise() * 0.1), SAMPLE_RATE)).toBeNull();
+    expect(detectBpm(new Float32Array(n).fill(0.5), SAMPLE_RATE)).toBeNull();
+    expect(detectBpm(Float32Array.from({ length: n }, (_, i) => (Math.sin((2 * Math.PI * 220 * i) / SAMPLE_RATE) > 0 ? 0.9 : -0.9)), SAMPLE_RATE)).toBeNull();
+    expect(detectBpm(Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin((2 * Math.PI * 440 * i) / SAMPLE_RATE)), SAMPLE_RATE)).toBeNull();
+  });
+
   it('returns null for silence and for audio too short to analyse', () => {
     expect(detectBpm(new Float32Array(SAMPLE_RATE * 20), SAMPLE_RATE)).toBeNull();
     const short = renderPattern({ bpm: 120, seconds: 2, sampleRate: SAMPLE_RATE, style: 'clicks' });

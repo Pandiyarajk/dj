@@ -44,6 +44,12 @@ const PRIOR_BPM = 135;
 const PRIOR_OCTAVES = 0.75;
 /** Below this beat confidence the track is treated as having no steady beat. */
 const MIN_CONFIDENCE = 0.6;
+/**
+ * Below this mean onset strength there are no real onsets at all (steady
+ * tones, DC, hum): measured 1.5-2.5 on beat tracks, 0.05-0.8 on non-music.
+ * A steady square wave otherwise read 74 BPM at confidence 0.74.
+ */
+const MIN_ENVELOPE = 0.8;
 /** Seconds of envelope used to rank candidates: long enough to separate them, short enough that a coarse step cannot drift off the beats. */
 const EXCERPT_SECONDS = 40;
 /** Largest drift, in seconds, the final tempo step may cause across the whole track. */
@@ -323,7 +329,7 @@ export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult 
   let mean = 0;
   for (let i = 0; i < env.values.length; i++) mean += env.values[i];
   mean /= env.values.length;
-  if (result.score <= 0 || mean <= 0) return null;
+  if (result.score <= 0 || mean < MIN_ENVELOPE) return null;
 
   // Onset flux peaks at the frame where the energy jump starts: reporting the
   // frame centre (+half a hop) put every grid 2.0-4.0 ms late on the corpus.

@@ -66,6 +66,7 @@ export interface Loudness {
 }
 
 const ABSOLUTE_GATE = -70;
+const MIN_GATED_BLOCKS = 5;
 const RELATIVE_GATE = 10;
 
 function blockLoudness(meanSquare: number): number {
@@ -106,6 +107,9 @@ export function measureLoudness(channels: Float32Array[], sampleRate: number): L
   if (loud.length === 0) return { lufs: -Infinity, peakDb: peak > 0 ? 20 * Math.log10(peak) : -Infinity };
   const threshold = blockLoudness(loud.reduce((a, b) => a + b, 0) / loud.length) - RELATIVE_GATE;
   const gated = loud.filter((z) => blockLoudness(z) > threshold);
+  // Fewer than 5 gated blocks (under a second) is a click or a DC step, not
+  // programme material: pure DC otherwise earned +4.3 dB of auto-gain.
+  if (gated.length < MIN_GATED_BLOCKS) return { lufs: -Infinity, peakDb: 20 * Math.log10(peak) };
   // A mono file plays on both speakers: measure it as dual mono, or it reads
   // 3 dB quieter than the same mix in stereo and auto-gain over-boosts it.
   const dualMono = channels.length === 1 ? 10 * Math.log10(2) : 0;
@@ -120,6 +124,8 @@ export function measureLoudness(channels: Float32Array[], sampleRate: number): L
  */
 export const AUTO_GAIN_TARGET = -14;
 const MAX_ADJUST_DB = 12;
+/** Tracks quieter than this (LUFS) are not boosted at all. */
+const QUIETEST_BOOSTED = -50;
 /** Boosts stop so the peak stays below this, dBFS: otherwise the limiter pumps. */
 const PEAK_CEILING = -1;
 
@@ -128,7 +134,8 @@ const PEAK_CEILING = -1;
  * and a boost never pushes the peak above the ceiling. 0 for silence.
  */
 export function autoGainDb(loudness: Loudness | null): number {
-  if (!loudness || !Number.isFinite(loudness.lufs)) return 0;
+  // Near-silence is left alone: +12 dB on -68 LUFS noise just raises the hiss.
+  if (!loudness || !Number.isFinite(loudness.lufs) || loudness.lufs < QUIETEST_BOOSTED) return 0;
   let gain = Math.max(-MAX_ADJUST_DB, Math.min(MAX_ADJUST_DB, AUTO_GAIN_TARGET - loudness.lufs));
   if (gain > 0 && Number.isFinite(loudness.peakDb)) gain = Math.min(gain, Math.max(0, PEAK_CEILING - loudness.peakDb));
   return gain;

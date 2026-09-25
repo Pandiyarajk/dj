@@ -17,6 +17,11 @@ import type { Store } from './store';
 import { formatTime } from '../audio/deck-controller';
 
 const SESSION_KEY = 'session';
+/**
+ * Synchronous mirror written on page hide: the IndexedDB write started there
+ * does not land before unload, so the banner showed a position up to 2 s old.
+ */
+const MIRROR_KEY = 'dj.session';
 const SAVE_EVERY_MS = 2000;
 /** Older sessions are not offered. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -63,7 +68,18 @@ export class SessionManager {
   /** Start saving periodically and on page hide. */
   start(): void {
     this.timer = setInterval(() => void this.save(), SAVE_EVERY_MS);
-    window.addEventListener('pagehide', () => void this.save());
+    const saveNow = (): void => {
+      const session = this.snapshot();
+      if (!session) return;
+      try {
+        localStorage.setItem(MIRROR_KEY, JSON.stringify(session));
+      } catch {
+        // Storage blocked or full: the periodic IndexedDB save still applies.
+      }
+      void setSetting(SESSION_KEY, session).catch(() => undefined);
+    };
+    window.addEventListener('pagehide', saveNow);
+    window.addEventListener('beforeunload', saveNow);
   }
 
   stop(): void {
@@ -91,12 +107,27 @@ export class SessionManager {
 
   /** The saved session if it is recent enough to offer, else null. */
   async saved(): Promise<Session | null> {
-    const session = await getSetting<Session>(SESSION_KEY).catch(() => null);
+    const stored = await getSetting<Session>(SESSION_KEY).catch(() => null);
+    const mirror = ((): Session | null => {
+      try {
+        const raw = localStorage.getItem(MIRROR_KEY);
+        return raw ? (JSON.parse(raw) as Session) : null;
+      } catch {
+        return null;
+      }
+    })();
+    // The newer of the two: the mirror usually wins after a reload.
+    const session = [stored, mirror].filter((s): s is Session => s !== null && Array.isArray(s.decks)).sort((a, b) => b.savedAt - a.savedAt)[0];
     if (!session || Date.now() - session.savedAt > MAX_AGE_MS) return null;
     return session;
   }
 
   async discard(): Promise<void> {
+    try {
+      localStorage.removeItem(MIRROR_KEY);
+    } catch {
+      // Nothing to remove.
+    }
     await setSetting(SESSION_KEY, null).catch(() => undefined);
   }
 

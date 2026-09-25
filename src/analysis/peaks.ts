@@ -28,6 +28,13 @@ const HIGH_CUT = 2000;
  * view; normalising all bands together let the bass hide the hats.
  */
 const NORMALISE_PERCENTILE = 0.995;
+/**
+ * Bands are never scaled up beyond this reference level (-40 dBFS): without
+ * a floor, -66 dBFS noise was drawn at full height like a mastered track.
+ */
+const REFERENCE_FLOOR = 0.01;
+/** DC blocker pole: removes offset before banding, so DC does not fill the low band. */
+const DC_POLE = 0.995;
 
 /** Value at `fraction` of the sorted distribution of `values` (ignores silence). */
 function percentile(values: Float32Array, fraction: number): number {
@@ -51,13 +58,18 @@ export function computePeaks(samples: Float32Array, sampleRate: number, binsPerS
   const bins = Math.ceil(samples.length / binSize);
   const bands = [new Float32Array(bins), new Float32Array(bins), new Float32Array(bins)];
 
+  let dcIn = 0;
+  let dcOut = 0;
   for (let b = 0; b < bins; b++) {
     const end = Math.min(samples.length, (b + 1) * binSize);
     let l = 0;
     let m = 0;
     let h = 0;
     for (let i = b * binSize; i < end; i++) {
-      const x = samples[i];
+      // One-pole DC blocker: y = x - x[-1] + R * y[-1].
+      dcOut = samples[i] - dcIn + DC_POLE * dcOut;
+      dcIn = samples[i];
+      const x = dcOut;
       const low = lowFilter.next(x);
       const belowHigh = belowHighFilter.next(x);
       const lv = Math.abs(low);
@@ -73,8 +85,8 @@ export function computePeaks(samples: Float32Array, sampleRate: number, binsPerS
   }
 
   const [low, mid, high] = bands.map((band) => {
-    const reference = percentile(band, NORMALISE_PERCENTILE);
-    const scale = reference > 0 ? 255 / reference : 0;
+    const reference = Math.max(REFERENCE_FLOOR, percentile(band, NORMALISE_PERCENTILE));
+    const scale = 255 / reference;
     return Uint8Array.from(band, (v) => Math.min(255, Math.round(v * scale)));
   });
   return { binsPerSecond: sampleRate / binSize, low, mid, high };

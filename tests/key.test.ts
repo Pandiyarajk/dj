@@ -77,8 +77,12 @@ describe('detectKey', () => {
     expect(compatibleKeys('8A')).toContain(result?.camelot);
   });
 
-  it('returns null for silence', () => {
+  it('returns null for silence, noise and DC (no tonal content)', () => {
     expect(detectKey(new Float32Array(RATE * 10), RATE)).toBeNull();
+    let seed = 7;
+    const noise = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    expect(detectKey(Float32Array.from({ length: RATE * 10 }, () => noise() * 0.1), RATE)).toBeNull();
+    expect(detectKey(new Float32Array(RATE * 10).fill(0.5), RATE)).toBeNull();
   });
 });
 

@@ -18,6 +18,8 @@ export interface KeyResult {
   camelot: string;
   /** Correlation margin over the runner-up, 0..1 (small = ambiguous). */
   confidence: number;
+  /** Correlation with the winning key profile, -1..1 (how key-like the audio is at all). */
+  strength: number;
 }
 
 const NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
@@ -151,12 +153,19 @@ export function keyFromChroma(chromaVector: number[]): KeyResult | null {
   const [best, next] = scores;
   const name = `${NOTES[best.tonic]} ${best.minor ? 'minor' : 'major'}`;
   const camelot = `${(best.minor ? CAMELOT_MINOR : CAMELOT_MAJOR)[best.tonic]}${best.minor ? 'A' : 'B'}`;
-  return { name, camelot, confidence: Math.max(0, Math.min(1, best.r - next.r)) };
+  return { name, camelot, confidence: Math.max(0, Math.min(1, best.r - next.r)), strength: best.r };
 }
 
-/** Detect the key of a mono signal. */
+/**
+ * Below this correlation with the best key profile the audio has no key at
+ * all: noise and DC measured 0.31-0.32, the corpus tracks 0.40-0.94.
+ */
+const MIN_STRENGTH = 0.36;
+
+/** Detect the key of a mono signal; null for silence and for noise-like audio. */
 export function detectKey(samples: Float32Array, sampleRate: number): KeyResult | null {
-  return keyFromChroma(chroma(samples, sampleRate));
+  const result = keyFromChroma(chroma(samples, sampleRate));
+  return result && result.strength >= MIN_STRENGTH ? result : null;
 }
 
 /**

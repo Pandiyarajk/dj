@@ -257,8 +257,31 @@ export class DeckController {
     this.store.set({ statusText: text });
   }
 
+  /**
+   * A load failed: clear the deck. Keeping the old title, key and gain on
+   * screen made a deck that says "Load a track first" look loaded.
+   */
   fail(message: string): void {
-    this.store.set({ status: 'error', statusText: message, analysis: null });
+    this.pause();
+    this.send({ type: 'unload' });
+    this.lengthFrames = 0;
+    this.setLoudness(null, null);
+    this.store.set({
+      status: 'error',
+      statusText: message,
+      analysis: null,
+      track: null,
+      bpm: null,
+      key: null,
+      peaks: null,
+      loop: null,
+      lastLoop: null,
+      loopIn: null,
+      hotCues: new Array(HOT_CUE_COUNT).fill(null),
+      cuePoint: 0,
+      synced: false,
+      previewing: null,
+    });
   }
 
   /** Hand a decoded track to the processor. */
