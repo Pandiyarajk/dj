@@ -107,6 +107,10 @@ async function boot(): Promise<void> {
   const midi = new MidiInput(actions);
 
   const load = (entry: LibraryEntry, deck: DeckController): void => {
+    if (deck.state.locked) {
+      deck.notice(`Deck ${deck.id} is locked (on air): unlock it to load`, 'warn');
+      return;
+    }
     if (deck.state.playing) {
       deck.notice('Deck is playing: pause it before loading', 'warn');
       return;
@@ -178,8 +182,9 @@ async function boot(): Promise<void> {
   const deckViews = decks
     .map((deck) =>
       start(`Deck ${deck.id}`, () => new DeckView(deck, actions, { onFile: (file) => {
-        // Same guard as library loads: a drop must not replace a playing track.
-        if (deck.state.playing) deck.notice('Deck is playing: pause it before loading', 'warn');
+        // Same guards as library loads: a drop must not replace a playing or locked track.
+        if (deck.state.locked) deck.notice(`Deck ${deck.id} is locked (on air): unlock it to load`, 'warn');
+        else if (deck.state.playing) deck.notice('Deck is playing: pause it before loading', 'warn');
         else void loader.loadFile(deck, file);
       }, onEntry: (id) => {
         const entry = entryById(id);
@@ -212,6 +217,17 @@ async function boot(): Promise<void> {
   };
   window.addEventListener('pointerdown', unlock, { capture: true });
   window.addEventListener('keydown', unlock, { capture: true });
+  // Ctrl+Z (Cmd+Z) undoes the last load, outside text fields.
+  window.addEventListener('keydown', (event) => {
+    const editing = event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) && (event.target as HTMLInputElement).type !== 'range';
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z' || event.shiftKey || editing) return;
+    event.preventDefault();
+    void loader.undo();
+  });
+  // Closing or reloading mid-set loses the decks: ask first while anything plays.
+  window.addEventListener('beforeunload', (event) => {
+    if (decks.some((d) => d.state.playing)) event.preventDefault();
+  });
   // Dropping a file outside a deck would navigate away from the app.
   window.addEventListener('dragover', (event) => event.preventDefault());
   window.addEventListener('drop', (event) => event.preventDefault());
@@ -240,7 +256,7 @@ async function boot(): Promise<void> {
   const params = new URLSearchParams(location.search);
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

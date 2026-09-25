@@ -434,6 +434,37 @@ try {
   const errorText = await evaluate(`document.querySelector('.deck-b .deck-status').textContent`);
   check('undecodable file shows an error on the deck', /cannot decode/.test(errorText), errorText);
 
+  // ---- undo last load and the on-air lock ----
+  const rowButton = async (title, deck) => {
+    const rect = await evaluate(`(() => {
+      const row = [...document.querySelectorAll('.library-table tr')].find((tr) => tr.querySelector('.col-title')?.textContent === ${JSON.stringify(title)});
+      const b = row.querySelector('.btn-load-${deck}');
+      b.scrollIntoView({ block: 'center' });
+      const r = b.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...rect, button: 'left', clickCount: 1 });
+  };
+  await evaluate(`${deckExpr(0)}.seek(5)`);
+  await sleep(150);
+  await rowButton('Demo House 124', 'a');
+  await waitFor(`${deckExpr(0)}.state.track?.title === 'Demo House 124' && ${deckExpr(0)}.state.status === 'ready'`, 15000, 'demo loaded over the click track');
+  await key('KeyZ', 'z', 2);
+  await waitFor(`${deckExpr(0)}.state.track?.title === 'Click Track' && ${deckExpr(0)}.state.status === 'ready'`, 15000, 'undo restored the previous track');
+  await sleep(200);
+  const undone = await evaluate(`({ pos: ${deckExpr(0)}.renderPosition(), notice: document.querySelector('.deck-a .deck-status').textContent })`);
+  check('Ctrl+Z undoes a load, back at the old position', Math.abs(undone.pos - 5) < 0.1 && /Restored/.test(undone.notice), `${undone.pos.toFixed(2)} s, "${undone.notice}"`);
+
+  await evaluate(`${deckExpr(0)}.play()`);
+  await key('KeyT', 't');
+  await key('KeyQ', 'q');
+  await rowButton('Demo House 128', 'a');
+  await sleep(300);
+  const locked = await evaluate(`({ locked: ${deckExpr(0)}.state.locked, playing: ${deckExpr(0)}.state.playing, title: ${deckExpr(0)}.state.track.title, notice: document.querySelector('.deck-a .deck-status').textContent, badge: getComputedStyle(document.querySelector('.deck-a'), '::after').content })`);
+  check('lock blocks pause and loads on a playing deck, and says so', locked.locked && locked.playing && locked.title === 'Click Track' && /locked/.test(locked.notice), `"${locked.notice}"`);
+  await key('KeyT', 't');
+  await evaluate(`${deckExpr(0)}.pause()`);
+
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');
     const { data } = await send('Page.captureScreenshot', { format: 'png' });

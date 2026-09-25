@@ -7,10 +7,10 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (atomic merged writes, analysis versioning, per-deck
- *   cancellable analysis, flush on page hide, lower peak memory)
+ *   cancellable analysis, flush on page hide, lower peak memory, undo last load)
  */
 import { AnalysisClient, type AnalysisResult } from '../analysis/analysis-client';
-import type { DeckController, SavedTrackData, TrackInfo } from '../audio/deck-controller';
+import { formatTime, type DeckController, type SavedTrackData, type TrackInfo } from '../audio/deck-controller';
 import { renderDemo } from '../demo/demo-tracks';
 import { ANALYSIS_VERSION, getTrack, hasCurrentAnalysis, patchTrack, trackKey, updateTrack, type CachedTrack } from './db';
 import { errorText, type Library, type LibraryEntry } from './library';
@@ -21,6 +21,17 @@ interface TrackHint {
   title: string;
   artist: string;
   album: string;
+}
+
+/** What was loaded onto a deck: a library row or a loose file. */
+export type LoadSource = { entry: LibraryEntry } | { file: File };
+
+/** A deck's previous track, for undo. */
+interface PreviousLoad {
+  source: LoadSource;
+  title: string;
+  /** Where the previous track was, seconds. */
+  position: number;
 }
 
 /** Wait this long after the last cue change before writing it to the cache, ms. */
@@ -37,6 +48,11 @@ export class TrackLoader {
   private readonly tokens = new Map<DeckController, number>();
   /** Library row currently on each deck, for BPM write-back. */
   private readonly rows = new Map<DeckController, string>();
+  /** What each deck holds now, and what it held before the last load (undo). */
+  private readonly current = new Map<DeckController, LoadSource>();
+  private readonly previous = new Map<DeckController, PreviousLoad>();
+  /** Deck of the most recent load, which Ctrl+Z undoes. */
+  private lastLoaded: DeckController | null = null;
   /** One analysis worker per deck, so cancelling one load never stalls the other deck. */
   private readonly analysers = new Map<DeckController, AnalysisClient>();
   /** Unsaved cue edits per track key (not per deck: a deck may move on before the write). */
@@ -66,39 +82,83 @@ export class TrackLoader {
     return token;
   }
 
-  private current(deck: DeckController, token: number): boolean {
+  private isCurrent(deck: DeckController, token: number): boolean {
     return this.tokens.get(deck) === token;
   }
 
+  /**
+   * Load onto a deck, remembering what was there so the load can be undone.
+   *
+   * @param restoreAt seek here once loaded (undo and session restore).
+   */
+  async load(deck: DeckController, source: LoadSource, restoreAt?: number): Promise<void> {
+    const held = this.current.get(deck);
+    const track = deck.state.track;
+    if (held && track && deck.loaded) this.previous.set(deck, { source: held, title: track.title, position: deck.position() });
+    this.current.set(deck, source);
+    this.lastLoaded = deck;
+    const after = restoreAt === undefined ? undefined : () => deck.seek(restoreAt);
+    if ('entry' in source) await this.loadEntryWith(deck, source.entry, after);
+    else await this.loadFileSource(deck, source.file, after);
+  }
+
+  /** Put back the deck's previous track at its old position (a second undo redoes). */
+  async undo(deck: DeckController | null = this.lastLoaded): Promise<void> {
+    const prev = deck ? this.previous.get(deck) : undefined;
+    if (!deck || !prev) {
+      (deck ?? null)?.notice('Nothing to undo');
+      return;
+    }
+    if (deck.state.playing) {
+      deck.notice('Deck is playing: pause it before undoing the load', 'warn');
+      return;
+    }
+    await this.load(deck, prev.source, prev.position);
+    if (deck.loaded) deck.notice(`Restored "${prev.title}" at ${formatTime(prev.position)}`);
+  }
+
+  /** What a deck holds now (for session save). */
+  sourceOf(deck: DeckController): LoadSource | undefined {
+    return this.current.get(deck);
+  }
+
   /** Load a library row onto a deck. */
-  async loadEntry(deck: DeckController, entry: LibraryEntry): Promise<void> {
+  loadEntry(deck: DeckController, entry: LibraryEntry, restoreAt?: number): Promise<void> {
+    return this.load(deck, { entry }, restoreAt);
+  }
+
+  /** Load a dropped or picked file onto a deck. */
+  loadFile(deck: DeckController, file: File): Promise<void> {
+    return this.load(deck, { file });
+  }
+
+  private async loadEntryWith(deck: DeckController, entry: LibraryEntry, after?: () => void): Promise<void> {
     this.rows.set(deck, entry.id);
-    if (entry.source.kind === 'demo') return this.loadDemo(deck, entry);
+    if (entry.source.kind === 'demo') return this.loadDemo(deck, entry, after);
     const token = this.begin(deck);
     deck.beginLoad(`Opening "${entry.title}"...`);
     try {
       const file = await entry.source.getFile();
       // A row still showing a file-name guess is no hint: read the real tags.
       const hint = entry.tagsKnown ? { title: entry.title, artist: entry.artist, album: entry.album } : null;
-      if (this.current(deck, token)) await this.loadFileWith(deck, file, token, hint);
+      if (this.isCurrent(deck, token)) await this.loadFileWith(deck, file, token, hint, after);
     } catch (error) {
-      if (this.current(deck, token)) deck.fail(`Could not open "${entry.title}": ${errorText(error)}`);
+      if (this.isCurrent(deck, token)) deck.fail(`Could not open "${entry.title}": ${errorText(error)}`);
     }
   }
 
-  /** Load a dropped or picked file onto a deck. */
-  async loadFile(deck: DeckController, file: File): Promise<void> {
+  private async loadFileSource(deck: DeckController, file: File, after?: () => void): Promise<void> {
     this.rows.delete(deck);
     const token = this.begin(deck);
-    await this.loadFileWith(deck, file, token, null);
+    await this.loadFileWith(deck, file, token, null, after);
   }
 
-  private async loadFileWith(deck: DeckController, file: File, token: number, hint: TrackHint | null): Promise<void> {
+  private async loadFileWith(deck: DeckController, file: File, token: number, hint: TrackHint | null, after?: () => void): Promise<void> {
     deck.beginLoad(`Reading "${file.name}"...`);
     const key = trackKey(file);
     try {
       const [bytes, cached] = await Promise.all([file.arrayBuffer(), getTrack(key).catch(() => null)]);
-      if (!this.current(deck, token)) return;
+      if (!this.isCurrent(deck, token)) return;
       deck.setStatusText('Decoding...');
       let audio: AudioBuffer | null;
       try {
@@ -106,7 +166,7 @@ export class TrackLoader {
       } catch {
         throw new Error('the browser cannot decode this file (unsupported or damaged)');
       }
-      if (!this.current(deck, token)) return;
+      if (!this.isCurrent(deck, token)) return;
 
       const tags: TrackHint = cached ?? hint ?? (await readTags(file));
       const info: TrackInfo = { key, title: tags.title, artist: tags.artist, duration: audio.duration };
@@ -118,6 +178,7 @@ export class TrackLoader {
       const mono = upToDate ? null : downmix(audio);
       const sampleRate = audio.sampleRate;
       deck.load(audio, info, saved);
+      after?.();
       audio = null;
       if (!mono) return;
 
@@ -125,25 +186,26 @@ export class TrackLoader {
       if (!result) return;
       this.saveAnalysis(deck, { ...info, album: tags.album }, result);
     } catch (error) {
-      if (this.current(deck, token)) deck.fail(`Could not load "${file.name}": ${errorText(error)}`);
+      if (this.isCurrent(deck, token)) deck.fail(`Could not load "${file.name}": ${errorText(error)}`);
     }
   }
 
-  private async loadDemo(deck: DeckController, entry: LibraryEntry): Promise<void> {
+  private async loadDemo(deck: DeckController, entry: LibraryEntry, after?: () => void): Promise<void> {
     if (entry.source.kind !== 'demo') return;
     const spec = entry.source.spec;
     const token = this.begin(deck);
     deck.beginLoad(`Rendering "${spec.title}"...`);
     // Yield a frame so the loading state paints before the synchronous render.
     await new Promise((resolve) => setTimeout(resolve, 30));
-    if (!this.current(deck, token)) return;
+    if (!this.isCurrent(deck, token)) return;
     try {
       const audio = renderDemo(spec, this.ctx);
       const mono = downmix(audio);
       deck.load(audio, { key: `demo:${spec.id}`, title: spec.title, artist: 'Built-in demo', duration: audio.duration }, null);
+      after?.();
       await this.analyse(deck, mono, audio.sampleRate, token);
     } catch (error) {
-      if (this.current(deck, token)) deck.fail(`Could not render demo: ${errorText(error)}`);
+      if (this.isCurrent(deck, token)) deck.fail(`Could not render demo: ${errorText(error)}`);
     }
   }
 
@@ -153,15 +215,15 @@ export class TrackLoader {
     if (!client) return null;
     try {
       const result = await client.analyse(mono, sampleRate, (fraction) => {
-        if (this.current(deck, token)) deck.setAnalysisProgress(fraction);
+        if (this.isCurrent(deck, token)) deck.setAnalysisProgress(fraction);
       });
-      if (!this.current(deck, token)) return null;
+      if (!this.isCurrent(deck, token)) return null;
       deck.setAnalysis(result);
       const row = this.rows.get(deck);
       if (row) this.library.noteBpm(row, result.bpm);
       return result;
     } catch (error) {
-      if (this.current(deck, token)) deck.fail(`Analysis failed: ${errorText(error)}`);
+      if (this.isCurrent(deck, token)) deck.fail(`Analysis failed: ${errorText(error)}`);
       return null;
     }
   }

@@ -28,7 +28,7 @@ export class HelpDialog {
       h('div', { class: 'help-body' }, sections),
       h('p', {
         class: 'help-foot',
-        text: 'Press ? to toggle this list. Knobs: drag up/down (Shift for fine), scroll, or arrow keys; double-click resets. CUE and hot cues on a stopped deck play while held; press PLAY during the hold to keep playing. Hot cue pads: Shift+click or right-click clears.',
+        text: 'Press ? to toggle this list. Knobs: drag up/down (Shift for fine), scroll, or arrow keys; double-click resets. Ctrl+Z undoes the last load. CUE and hot cues on a stopped deck play while held; press PLAY during the hold to keep playing. Hot cue pads: Shift+click or right-click clears.',
       }),
     ]);
     close.addEventListener('click', () => this.el.close());

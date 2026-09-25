@@ -39,6 +39,7 @@ export class DeckView {
   private readonly cueButton: HTMLButtonElement;
   private readonly syncButton: HTMLButtonElement;
   private readonly quantizeButton: HTMLButtonElement;
+  private readonly lockButton: HTMLButtonElement;
   private readonly loopButton: HTMLButtonElement;
   private readonly loopInButton: HTMLButtonElement;
   private readonly pads: HTMLButtonElement[] = [];
@@ -69,6 +70,7 @@ export class DeckView {
     this.syncButton = btn('SYNC', 'sync', 'Match tempo and phase to the other deck; press again to release', 'btn-sync');
     this.quantizeButton = btn('Q', 'quantize', 'Quantize: snap cues and loops to the beat grid, keep the beat on jumps', 'btn-small');
     this.rangeButton = btn('8%', 'range', 'Tempo fader range', 'btn-small');
+    this.lockButton = btn('LOCK', 'lock', 'Lock on air: blocks loading, CUE and pause on this deck while it plays', 'btn-tiny btn-lock');
 
     for (let i = 0; i < HOT_CUE_COUNT; i++) this.pads.push(this.pad(actions, `${d}.hotcue.${i + 1}`, i));
 
@@ -93,6 +95,7 @@ export class DeckView {
       h('header', { class: 'deck-header' }, [
         h('div', { class: 'deck-id', text: deck.id }),
         h('div', { class: 'track-info' }, [this.title, this.artist]),
+        this.lockButton,
         h('div', { class: 'bpm' }, [
           this.bpm,
           h('div', { class: 'bpm-tools' }, [
@@ -238,6 +241,8 @@ export class DeckView {
     setClass(this.cueButton, 'on', state.previewing === 'cue');
     setClass(this.syncButton, 'on', state.synced);
     setClass(this.quantizeButton, 'on', state.quantize);
+    setClass(this.lockButton, 'on', state.locked);
+    setClass(this.el, 'locked', state.locked);
     setText(this.rangeButton, `${Math.round(state.tempoRange * 100)}%`);
     setClass(this.loopButton, 'on', state.loop !== null);
     setClass(this.loopInButton, 'on', state.loopIn !== null);

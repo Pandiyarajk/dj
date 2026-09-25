@@ -34,6 +34,7 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     actions.register(`${d}.cue`, (v) => (v > 0 ? deck.cueDown() : deck.cueUp()));
     press('sync', () => sync.toggle(deck));
     press('quantize', () => deck.toggleQuantize());
+    press('lock', () => deck.toggleLock());
     press('range', () => deck.cycleTempoRange());
     press('tempo.reset', () => deck.resetTempo());
     press('loop.toggle', () => deck.toggleLoop());

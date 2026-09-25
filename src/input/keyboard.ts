@@ -34,6 +34,7 @@ function deckKeys(deck: 'A' | 'B', keys: Record<string, string>, cues: string[])
     { ...letter(keys.play), action: `${d}.play`, description: 'Play / pause', group },
     { ...letter(keys.cue), action: `${d}.cue`, hold: true, description: 'Cue (hold to preview)', group },
     { ...letter(keys.sync), action: `${d}.sync`, description: 'Sync on / off', group },
+    { ...letter(keys.lock), action: `${d}.lock`, description: 'Lock on air (blocks load, CUE, pause)', group },
     { ...letter(keys.loop), action: `${d}.loop.toggle`, description: 'Loop on / off', group },
     { ...letter(keys.halve), action: `${d}.loop.halve`, description: 'Halve loop', group },
     { ...letter(keys.double), action: `${d}.loop.double`, description: 'Double loop', group },
@@ -57,8 +58,8 @@ function deckKeys(deck: 'A' | 'B', keys: Record<string, string>, cues: string[])
 }
 
 export const KEYMAP: KeyBinding[] = [
-  ...deckKeys('A', { play: 'Q', cue: 'W', sync: 'E', loop: 'R', halve: 'D', double: 'F', back: 'Z', forward: 'X', slower: 'A', faster: 'S' }, ['1', '2', '3', '4']),
-  ...deckKeys('B', { play: 'P', cue: 'O', sync: 'I', loop: 'U', halve: 'H', double: 'J', back: 'N', forward: 'M', slower: 'K', faster: 'L' }, ['7', '8', '9', '0']),
+  ...deckKeys('A', { play: 'Q', cue: 'W', sync: 'E', lock: 'T', loop: 'R', halve: 'D', double: 'F', back: 'Z', forward: 'X', slower: 'A', faster: 'S' }, ['1', '2', '3', '4']),
+  ...deckKeys('B', { play: 'P', cue: 'O', sync: 'I', lock: 'Y', loop: 'U', halve: 'H', double: 'J', back: 'N', forward: 'M', slower: 'K', faster: 'L' }, ['7', '8', '9', '0']),
   { code: 'Equal', key: '=', action: 'view.zoom.in', description: 'Zoom waveforms in', group: 'View' },
   { code: 'Minus', key: '-', action: 'view.zoom.out', description: 'Zoom waveforms out', group: 'View' },
   { code: 'ArrowLeft', key: 'Left', action: 'mixer.xfader.left', description: 'Crossfader towards A', group: 'Mixer' },

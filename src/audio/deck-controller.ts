@@ -8,7 +8,7 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (loop validation, phase-preserving jumps, CDJ-style
  *   hold-to-preview cue and hot-cue gate, auto cue, BPM x2 / /2, seq on
- *   play/pause, loop-aware heard position)
+ *   play/pause, loop-aware heard position, on-air lock)
  */
 import { autoCuePoint } from '../analysis/auto-cue';
 import type { Peaks } from '../analysis/peaks';
@@ -91,6 +91,11 @@ export interface DeckState {
   loopSize: number;
   quantize: boolean;
   synced: boolean;
+  /**
+   * On-air lock: refuses loads, CUE-to-stop and pause, so a stray key cannot
+   * stop or replace the track the room is hearing.
+   */
+  locked: boolean;
 }
 
 function initialState(): DeckState {
@@ -116,6 +121,7 @@ function initialState(): DeckState {
     loopSize: 4,
     quantize: true,
     synced: false,
+    locked: false,
   };
 }
 
@@ -391,12 +397,26 @@ export class DeckController {
     this.store.set({ playing: false, previewing: null });
   }
 
+  /** Toggle the on-air lock. */
+  toggleLock(): void {
+    this.store.set({ locked: !this.state.locked });
+    this.notice(this.state.locked ? 'Locked: loads, CUE and pause are blocked' : 'Unlocked');
+  }
+
+  /** Refuse an action on a locked, playing deck; returns true if refused. */
+  private blockedByLock(action: string): boolean {
+    if (!this.state.locked || !this.state.playing) return false;
+    this.notice(`Deck ${this.id} is locked (on air): unlock to ${action}`, 'warn');
+    return true;
+  }
+
   togglePlay(): void {
     if (this.state.previewing !== null) {
       // PLAY during a held CUE or hot cue: keep playing when it is released.
       this.store.set({ previewing: null });
       this.notice('Playing');
     } else if (this.state.playing) {
+      if (this.blockedByLock('pause')) return;
       this.pause();
     } else {
       this.play();
@@ -413,6 +433,7 @@ export class DeckController {
       return;
     }
     if (this.state.playing) {
+      if (this.blockedByLock('go back to cue')) return;
       this.pause();
       this.seek(this.state.cuePoint);
       this.notice('Back to cue');
