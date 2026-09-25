@@ -303,6 +303,37 @@ th.sortable:focus-visible {
   white-space: nowrap;
 }
 
+.restore-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid rgba(54, 179, 255, 0.45);
+  background: rgba(54, 179, 255, 0.08);
+  border-radius: var(--radius);
+}
+
+.restore-text {
+  flex: 1;
+  min-width: 14rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.restore-detail {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.btn-restore {
+  color: #07090c;
+  background: linear-gradient(180deg, #6cc8ff, var(--accent-a));
+  border-color: #8ad4ff;
+}
+
 .error-banner {
   display: none;
   border: 1px solid var(--bad);

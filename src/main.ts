@@ -26,6 +26,7 @@ import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
 import { requestPersistence } from './library/db';
 import { TrackLoader } from './library/track-loader';
+import { describeDeck, SessionManager } from './state/session';
 import { Store } from './state/store';
 import { DeckView } from './ui/deck-view';
 import { h, setClass, setText } from './ui/dom';
@@ -254,9 +255,43 @@ async function boot(): Promise<void> {
   requestAnimationFrame(frame);
 
   const params = new URLSearchParams(location.search);
+  const session = new SessionManager(decks, mixer, loader, library);
+  // Offer the last session back (never restored unasked). Skipped for ?demo=1,
+  // which loads its own tracks.
+  if (params.get('demo') !== '1') {
+    const saved = await session.saved();
+    if (saved) {
+      const when = new Date(saved.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const detail = saved.decks.map((d, i) => describeDeck(i === 0 ? 'A' : 'B', d)).join('  |  ');
+      const restoreButton = h('button', { class: 'btn btn-small btn-restore', text: 'Restore', attrs: { type: 'button' } });
+      const dismissButton = h('button', { class: 'btn btn-small', text: 'Dismiss', attrs: { type: 'button' } });
+      const text = h('div', { class: 'restore-text' }, [
+        h('strong', { text: `Restore your session from ${when}?` }),
+        h('span', { class: 'restore-detail', text: detail }),
+      ]);
+      const banner = h('div', { class: 'restore-banner', attrs: { role: 'region', 'aria-label': 'Restore session' } }, [text, restoreButton, dismissButton]);
+      restoreButton.addEventListener('click', () => {
+        restoreButton.disabled = true;
+        dismissButton.disabled = true;
+        setText(restoreButton, 'Restoring...');
+        void session.restore(saved).then((results) => {
+          text.replaceChildren(h('strong', { text: 'Session restored' }), h('span', { class: 'restore-detail', text: results.join('  |  ') }));
+          restoreButton.remove();
+          setText(dismissButton, 'Close');
+          dismissButton.disabled = false;
+        });
+      });
+      dismissButton.addEventListener('click', () => {
+        banner.remove();
+        void session.discard();
+      });
+      app.insertBefore(banner, waves);
+    }
+  }
+  session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

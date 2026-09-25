@@ -465,6 +465,27 @@ try {
   await key('KeyT', 't');
   await evaluate(`${deckExpr(0)}.pause()`);
 
+  // ---- session restore after a reload ----
+  await evaluate(`(async () => {
+    const [a, b] = window.dj.decks;
+    const entries = window.dj.library.store.get().entries;
+    await window.dj.loader.loadEntry(a, entries.find((e) => e.id === 'demo:house-124'), 20);
+    await window.dj.loader.loadEntry(b, entries.find((e) => e.id === 'demo:dnb-174'), 7.5);
+    window.dj.mixer.set({ crossfader: 0.3 });
+    await window.dj.session.save();
+  })()`);
+  const plain = new URL(base);
+  plain.searchParams.set('debug', '1');
+  await send('Page.navigate', { url: plain.href });
+  await waitFor(`document.querySelector('.restore-banner')`, 15000, 'restore banner');
+  const bannerText = await evaluate(`document.querySelector('.restore-banner').textContent`);
+  check('reload offers the last session', /Demo House 124 at 0:20/.test(bannerText) && /Demo Drum and Bass 174 at 0:07/.test(bannerText), bannerText.slice(0, 120));
+  await click('.restore-banner', 'Restore');
+  await waitFor(`window.dj.decks.every((d) => d.state.status === 'ready' && d.state.bpm !== null)`, 30000, 'session restored');
+  await sleep(300);
+  const restored2 = await evaluate(`({ a: window.dj.decks[0].state.track.title, b: window.dj.decks[1].state.track.title, pa: window.dj.decks[0].renderPosition(), pb: window.dj.decks[1].renderPosition(), x: window.dj.mixer.get().crossfader, banner: document.querySelector('.restore-banner').textContent })`);
+  check('Restore puts back both tracks, positions and the mixer', restored2.a === 'Demo House 124' && restored2.b === 'Demo Drum and Bass 174' && Math.abs(restored2.pa - 20) < 0.1 && Math.abs(restored2.pb - 7.5) < 0.1 && Math.abs(restored2.x - 0.3) < 1e-9 && /Session restored/.test(restored2.banner), `A ${restored2.pa.toFixed(2)} s, B ${restored2.pb.toFixed(2)} s, xfader ${restored2.x}`);
+
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');
     const { data } = await send('Page.captureScreenshot', { format: 'png' });
