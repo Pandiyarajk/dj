@@ -2,13 +2,14 @@
  * Mixer state and the per-channel Web Audio strip.
  *
  * Signal path per channel:
- *   deck -> auto-gain -> trim -> 3-band isolator -> filter -> fader -> crossfader
+ *   deck -> auto-gain -> trim -> 3-band isolator -> filter -> fader -> FX -> crossfader
  *                                            '-> cue tap (pre-fader)
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
- * Modified: Sep-25-2026 (isolator EQ with true kills, one-knob filter, auto-gain)
+ * Modified: Sep-25-2026 (isolator EQ with true kills, one-knob filter, auto-gain, FX)
  */
+import { ChannelFx, defaultFx, type FxSettings } from './effects';
 import { dbToGain, faderGain, filterFrequencies, type CrossfaderCurve } from './mixer-math';
 
 export type CueMode = 'off' | 'split' | 'quad';
@@ -24,6 +25,8 @@ export interface ChannelSettings {
   fader: number;
   /** Send this channel to the headphone cue bus. */
   cue: boolean;
+  /** The channel's effect unit (post-fader). */
+  fx: FxSettings;
 }
 
 export interface MixerState {
@@ -61,6 +64,7 @@ export function defaultChannel(): ChannelSettings {
     filter: 0,
     fader: 0.8,
     cue: false,
+    fx: defaultFx(),
   };
 }
 
@@ -95,6 +99,7 @@ export class ChannelStrip {
   private readonly lowpass: BiquadFilterNode;
   private readonly highpass: BiquadFilterNode;
   private readonly fader: GainNode;
+  readonly fx: ChannelFx;
 
   constructor(private readonly ctx: BaseAudioContext) {
     this.input = ctx.createGain();
@@ -144,8 +149,12 @@ export class ChannelStrip {
     this.lowpass = biquad('lowpass', 22000, FILTER_Q);
     this.highpass = biquad('highpass', 10, FILTER_Q);
     sum.connect(this.lowpass).connect(this.highpass);
-    this.highpass.connect(this.fader).connect(this.output);
-    this.fader.connect(this.analyser);
+    // Effects after the fader: a fader cut stops feeding the echo but leaves
+    // its tail, while the crossfader still closes everything.
+    this.fx = new ChannelFx(ctx);
+    this.highpass.connect(this.fader).connect(this.fx.input);
+    this.fx.output.connect(this.output);
+    this.fx.output.connect(this.analyser);
     this.highpass.connect(this.cueSend);
   }
 
@@ -175,5 +184,6 @@ export class ChannelStrip {
     this.ramp(this.fader.gain, faderGain(settings.fader));
     this.ramp(this.output.gain, crossfaderGain);
     this.ramp(this.cueSend.gain, settings.cue ? 1 : 0);
+    this.fx.apply(settings.fx ?? defaultFx());
   }
 }

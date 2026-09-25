@@ -10,6 +10,7 @@
  */
 import { HOT_CUE_COUNT, LOOP_SIZES, type DeckController } from '../audio/deck-controller';
 import { EQ_MAX_DB, EQ_MIN_DB, TRIM_MAX_DB, TRIM_MIN_DB, type ChannelSettings, type EqBand, type MixerState } from '../audio/mixer';
+import { FX_BEATS, FX_TYPES } from '../audio/effects';
 import { centeredDbFromKnob } from '../audio/mixer-math';
 import type { SyncCoordinator } from '../audio/sync-coordinator';
 import type { Store } from '../state/store';
@@ -62,6 +63,12 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     const m = `mixer.${deck.id}`;
     actions.register(`${m}.fader`, (v) => updateChannel(mixer, ch, (c) => ({ ...c, fader: v })));
     actions.register(`${m}.trim`, (v) => updateChannel(mixer, ch, (c) => ({ ...c, trimDb: centeredDbFromKnob(v, TRIM_MIN_DB, TRIM_MAX_DB) })));
+    // Effect unit: on/off, type and beat division cycle, amount 0..1.
+    const fx = (change: (f: ChannelSettings['fx']) => ChannelSettings['fx']): void => updateChannel(mixer, ch, (c) => ({ ...c, fx: change(c.fx) }));
+    actions.register(`${m}.fx.toggle`, (v) => v > 0 && fx((f) => ({ ...f, on: !f.on })));
+    actions.register(`${m}.fx.type`, (v) => v > 0 && fx((f) => ({ ...f, type: FX_TYPES[(FX_TYPES.indexOf(f.type) + 1) % FX_TYPES.length] })));
+    actions.register(`${m}.fx.beats`, (v) => v > 0 && fx((f) => ({ ...f, beats: FX_BEATS[(FX_BEATS.indexOf(f.beats as (typeof FX_BEATS)[number]) + 1) % FX_BEATS.length] })));
+    actions.register(`${m}.fx.amount`, (v) => fx((f) => ({ ...f, amount: v })));
     // Filter knob: 0..1, 0.5 = off (see filterFrequencies).
     actions.register(`${m}.filter`, (v) => updateChannel(mixer, ch, (c) => ({ ...c, filter: v * 2 - 1 })));
     actions.register(`${m}.cue`, (v) => v > 0 && updateChannel(mixer, ch, (c) => ({ ...c, cue: !c.cue })));

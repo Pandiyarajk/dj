@@ -173,6 +173,10 @@ export class DeckController {
     });
     this.node.connect(strip.input);
     this.strip = strip;
+    // Time-based effects follow this deck's heard tempo.
+    this.store.subscribe((s, p) => {
+      if (s.bpm !== p.bpm || s.tempo !== p.tempo) strip.fx.setTempo(this.effectiveBpm);
+    });
     this.node.port.onmessage = (event: MessageEvent<DeckReport>) => this.onReport(event.data);
   }
 

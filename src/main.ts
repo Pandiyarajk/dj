@@ -204,7 +204,7 @@ async function boot(): Promise<void> {
         const entry = entryById(id);
         if (entry) load(entry, deck);
         else deck.notice('That track is no longer in the library', 'warn');
-      } })),
+      } }, mixer)),
     )
     .filter((v): v is DeckView => v !== null);
   const mixerView = start('Mixer', () => new MixerView(engine, mixer, actions, decks));

@@ -216,6 +216,27 @@ try {
   check('deck A playhead advances', posA > 0.5 && posA < 2, `${posA.toFixed(2)} s after 1.2 s`);
   check('audio reaches the master bus', peak > 0.05, `peak ${peak.toFixed(3)}`);
 
+  // Effects: tempo-synced echo, a tail that rings out, type cycling.
+  const masterPeak = `(async () => { let p = 0; for (let i = 0; i < 8; i++) { p = Math.max(p, window.dj.engine.meter(window.dj.engine.masterAnalyser).peak); await new Promise((r) => setTimeout(r, 40)); } return p; })()`;
+  await click('.deck-a .fx-row', 'FX');
+  await sleep(300);
+  const echoTime = await evaluate('window.dj.engine.strips[0].fx.echoTime');
+  const expectedEcho = (0.75 * 60) / (await evaluate(`${deckExpr(0)}.effectiveBpm`));
+  await evaluate(`${deckExpr(0)}.pause()`);
+  await sleep(350);
+  const tail = await evaluate(masterPeak);
+  await click('.deck-a .fx-row', 'FX ON');
+  await sleep(4500);
+  const silent = await evaluate(masterPeak);
+  check('echo is tempo-synced and rings out after the deck stops', Math.abs(echoTime - expectedEcho) < 0.005 && tail > 0.005 && silent < 0.002, `echo ${echoTime.toFixed(3)} s (want ${expectedEcho.toFixed(3)}), tail ${tail.toFixed(4)}, later ${silent.toFixed(4)}`);
+  await click('.deck-a .fx-row', 'ECHO');
+  const fxType = await evaluate(`document.querySelector('.deck-a .fx-type').textContent`);
+  await click('.deck-a .fx-row', fxType);
+  await click('.deck-a .fx-row', 'FLANGER');
+  check('FX type cycles ECHO, REVERB, FLANGER', fxType === 'REVERB' && (await evaluate(`document.querySelector('.deck-a .fx-type').textContent`)) === 'ECHO');
+  await evaluate(`${deckExpr(0)}.play()`);
+  await sleep(500);
+
   // Mix recording: about 3 s of the playing master, decoded back.
   await evaluate('window.dj.recorder.start({ memory: true })');
   const recLabel = await evaluate(`document.querySelector('.btn-rec').textContent`);

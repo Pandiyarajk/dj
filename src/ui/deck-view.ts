@@ -8,12 +8,16 @@
  *   track-end warning, fader synced unless dragged, accessible labels)
  */
 import { formatBeats, formatTime, HOT_CUE_COUNT, LOOP_SIZES, type DeckController, type DeckState } from '../audio/deck-controller';
+import type { MixerState } from '../audio/mixer';
 import type { Actions } from '../input/actions';
+import type { Store } from '../state/store';
 import { dragTracker, h, setClass, setText } from './dom';
 import { HOT_CUE_COLOURS, OverviewWaveform } from './waveform';
 
 /** MIME type used when dragging a library row onto a deck. */
 export const ENTRY_DRAG_TYPE = 'application/x-dj-entry';
+/** FX beat divisions as musicians write them (formatBeats only does 1/n). */
+const FX_BEAT_LABELS: Record<number, string> = { 0.25: '1/4', 0.5: '1/2', 0.75: '3/4', 1: '1 beat', 2: '2 beats' };
 /** Warn when a playing track has this many seconds left. */
 const END_WARNING_SECONDS = 30;
 
@@ -50,6 +54,7 @@ export class DeckView {
     private readonly deck: DeckController,
     actions: Actions,
     drop: DeckDropHandlers,
+    mixer?: Store<MixerState>,
   ) {
     const d = `deck.${deck.id}`;
     const btn = (label: string, action: string, title: string, cls = '', hold = false): HTMLButtonElement =>
@@ -100,7 +105,6 @@ export class DeckView {
       h('header', { class: 'deck-header' }, [
         h('div', { class: 'deck-id', text: deck.id }),
         h('div', { class: 'track-info' }, [this.title, this.artist]),
-        this.lockButton,
         this.keyChip,
         h('div', { class: 'bpm' }, [
           this.bpm,
@@ -111,7 +115,7 @@ export class DeckView {
           ]),
         ]),
       ]),
-      this.status,
+      h('div', { class: 'status-row' }, [this.lockButton, this.status]),
       canvas,
       h('div', { class: 'time-row' }, [this.elapsed, this.tempoReadout, this.remaining]),
       h('div', { class: 'deck-body' }, [
@@ -129,6 +133,7 @@ export class DeckView {
             btn('<< JUMP', 'jump.back', 'Beat jump back by the loop size', 'btn-small btn-wide'),
             btn('JUMP >>', 'jump.forward', 'Beat jump forward by the loop size', 'btn-small btn-wide'),
           ]),
+          mixer ? this.fxRow(actions, mixer) : null,
           h('div', { class: 'transport' }, [this.cueButton, this.playButton]),
         ]),
         h('div', { class: 'tempo-section' }, [
@@ -146,6 +151,31 @@ export class DeckView {
     this.attachDrop(drop);
     deck.store.subscribe((state) => this.renderState(state));
     this.renderState(deck.state);
+  }
+
+  /** The deck's effect unit: type, beat division, amount and on/off. */
+  private fxRow(actions: Actions, mixer: Store<MixerState>): HTMLElement {
+    const m = `mixer.${this.deck.id}`;
+    const index = this.deck.id === 'A' ? 0 : 1;
+    const btn = (action: string, title: string, cls: string): HTMLButtonElement =>
+      actions.button(`${m}.fx.${action}`, h('button', { class: `btn btn-small ${cls}`, title, attrs: { type: 'button', 'aria-label': title } }));
+    const type = btn('type', 'Effect type (click to change)', 'fx-type');
+    const beats = btn('beats', 'Echo time / flanger sweep, in beats', 'fx-beats');
+    const on = btn('toggle', 'Effect on / off (the tail rings out when switched off)', 'fx-on');
+    const amount = h('input', { class: 'fx-amount', title: 'Effect amount', attrs: { type: 'range', min: '0', max: '1', step: '0.01', 'aria-label': `Deck ${this.deck.id} effect amount` } });
+    const dragging = dragTracker(amount);
+    amount.addEventListener('input', () => actions.trigger(`${m}.fx.amount`, Number(amount.value)));
+    const render = (state: MixerState): void => {
+      const fx = state.channels[index].fx;
+      setText(type, fx.type.toUpperCase());
+      setText(beats, FX_BEAT_LABELS[fx.beats] ?? String(fx.beats));
+      setText(on, fx.on ? 'FX ON' : 'FX');
+      setClass(on, 'on', fx.on);
+      if (!dragging()) amount.value = String(fx.amount);
+    };
+    mixer.subscribe(render);
+    render(mixer.get());
+    return h('div', { class: 'fx-row' }, [type, beats, amount, on]);
   }
 
   /**
