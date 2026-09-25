@@ -10,6 +10,8 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (loop-wrap crossfade, ramped loop edits, seq on
+ *   play/pause/ended, shared buffer for mono tracks)
  */
 
 // AudioWorkletGlobalScope declarations. `declare` inside a module is
@@ -25,10 +27,12 @@ declare function registerProcessor(name: string, ctor: new () => AudioWorkletPro
 
 /** Messages the main thread sends. Positions are in frames. */
 export type DeckCommand =
-  | { type: 'load'; left: Float32Array; right: Float32Array }
+  /** `right` is omitted for mono tracks, which then share one buffer. */
+  | { type: 'load'; left: Float32Array; right?: Float32Array }
   | { type: 'unload' }
-  | { type: 'play' }
-  | { type: 'pause' }
+  /** `seq` makes position reports sent before this command stale. */
+  | { type: 'play'; seq: number }
+  | { type: 'pause'; seq: number }
   /**
    * Jump the read head. With `at` (a context time), `frame` is where the head
    * should be *at that time*: the processor adds however far playback has
@@ -43,12 +47,25 @@ export type DeckCommand =
 /** Messages the processor sends back. */
 export type DeckReport =
   | { type: 'position'; frame: number; time: number; playing: boolean; seq: number }
-  | { type: 'ended' };
+  | { type: 'ended'; seq: number };
 
 /** Samples over which play/pause/seek fade (about 5 ms at 48 kHz). */
 const RAMP_SAMPLES = 256;
 /** Post a position report every this many render quanta (about 10 ms). */
 const REPORT_EVERY = 4;
+/**
+ * Frames over which a loop wrap crossfades the loop end into the loop start
+ * (about 3 ms). A hard wrap clicks unless both ends happen to meet at a zero
+ * crossing, which only bar-aligned loops on clean material do.
+ */
+const LOOP_XFADE = 128;
+
+interface PendingSeek {
+  frame: number;
+  at: number | null;
+  /** Instead of `frame`: wrap the head into the (new) loop when the jump lands. */
+  wrapIntoLoop?: boolean;
+}
 
 class DeckProcessor extends AudioWorkletProcessor {
   private left: Float32Array | null = null;
@@ -60,7 +77,7 @@ class DeckProcessor extends AudioWorkletProcessor {
   private gain = 0;
   private loopStart = -1;
   private loopEnd = -1;
-  private pendingSeek: { frame: number; at: number | null } | null = null;
+  private pendingSeek: PendingSeek | null = null;
   private seq = 0;
   private quanta = 0;
 
@@ -73,7 +90,7 @@ class DeckProcessor extends AudioWorkletProcessor {
     switch (command.type) {
       case 'load':
         this.left = command.left;
-        this.right = command.right;
+        this.right = command.right ?? command.left;
         this.length = command.left.length;
         this.head = 0;
         this.playing = false;
@@ -87,9 +104,11 @@ class DeckProcessor extends AudioWorkletProcessor {
         this.playing = false;
         break;
       case 'play':
+        this.seq = command.seq;
         if (this.left) this.playing = true;
         break;
       case 'pause':
+        this.seq = command.seq;
         this.playing = false;
         break;
       case 'seek':
@@ -106,6 +125,13 @@ class DeckProcessor extends AudioWorkletProcessor {
       case 'loop':
         this.loopStart = command.start;
         this.loopEnd = command.end;
+        // A loop edit (halve, reloop from later on) can leave the head past the
+        // new end. Wrap it through the de-click ramp rather than on the next
+        // sample, which would be a hard jump.
+        if (this.head >= this.loopEnd) {
+          if (this.gain === 0) this.head = this.wrapped(this.head);
+          else this.pendingSeek = { frame: 0, at: null, wrapIntoLoop: true };
+        }
         break;
       case 'loopOff':
         this.loopStart = this.loopEnd = -1;
@@ -117,15 +143,24 @@ class DeckProcessor extends AudioWorkletProcessor {
     return Math.max(0, Math.min(this.length - 1, frame));
   }
 
+  /** `frame` folded into the active loop. */
+  private wrapped(frame: number): number {
+    const span = this.loopEnd - this.loopStart;
+    return frame >= this.loopEnd && span > 0 ? this.loopStart + ((frame - this.loopStart) % span) : frame;
+  }
+
   /** Head position for a seek landing at context time `now`. */
-  private seekTarget(seek: { frame: number; at: number | null }, now: number): number {
+  private seekTarget(seek: PendingSeek, now: number): number {
+    if (seek.wrapIntoLoop) return this.wrapped(this.head);
     // Only a playing deck moves on between `at` and now; a paused one starts from `frame`.
     const late = seek.at !== null && this.playing ? (now - seek.at) * sampleRate * this.rate : 0;
     return this.clamp(seek.frame + late);
   }
 
   private report(): void {
-    const frame = this.pendingSeek?.frame ?? this.head;
+    // A pending seek reports where the head will be now, not where it was at `at`.
+    const pending = this.pendingSeek;
+    const frame = pending && !pending.wrapIntoLoop ? this.seekTarget(pending, currentTime) : this.head;
     this.port.postMessage({ type: 'position', frame, time: currentTime, playing: this.playing, seq: this.seq } satisfies DeckReport);
   }
 
@@ -161,6 +196,10 @@ class DeckProcessor extends AudioWorkletProcessor {
     const last = this.length - 1;
     const step = 1 / RAMP_SAMPLES;
     const looping = this.loopEnd > this.loopStart && this.loopStart >= 0;
+    const span = this.loopEnd - this.loopStart;
+    // The crossfade reads LOOP_XFADE frames before the loop start, so the loop
+    // must leave room for it on both sides.
+    const xfadeFrom = looping && span > 2 * LOOP_XFADE && this.loopStart >= LOOP_XFADE ? this.loopEnd - LOOP_XFADE : Infinity;
 
     for (let i = 0; i < outL.length; i++) {
       const target = this.playing && this.pendingSeek === null ? 1 : 0;
@@ -177,20 +216,29 @@ class DeckProcessor extends AudioWorkletProcessor {
         continue;
       }
 
-      outL[i] = DeckProcessor.sample(left, this.head, last) * this.gain;
-      outR[i] = DeckProcessor.sample(right, this.head, last) * this.gain;
+      let l = DeckProcessor.sample(left, this.head, last);
+      let r = DeckProcessor.sample(right, this.head, last);
+      if (this.head >= xfadeFrom) {
+        // Equal-power crossfade into the audio just before the loop start, which
+        // the head continues from after the wrap below: no discontinuity.
+        const w = ((this.head - xfadeFrom) / LOOP_XFADE) * (Math.PI / 2);
+        const out = Math.cos(w);
+        const into = Math.sin(w);
+        const echo = this.head - span;
+        l = l * out + DeckProcessor.sample(left, echo, last) * into;
+        r = r * out + DeckProcessor.sample(right, echo, last) * into;
+      }
+      outL[i] = l * this.gain;
+      outR[i] = r * this.gain;
 
       this.head += this.rate;
-      if (looping && this.head >= this.loopEnd) {
-        const span = this.loopEnd - this.loopStart;
-        this.head = this.loopStart + ((this.head - this.loopStart) % span);
-      }
+      if (looping && this.head >= this.loopEnd) this.head = this.wrapped(this.head);
       if (this.head >= last) {
         this.head = last;
         // Only once: the fade-out keeps this branch running for RAMP_SAMPLES.
         if (this.playing) {
           this.playing = false;
-          this.port.postMessage({ type: 'ended' } satisfies DeckReport);
+          this.port.postMessage({ type: 'ended', seq: this.seq } satisfies DeckReport);
         }
       } else if (this.head < 0) {
         this.head = 0;

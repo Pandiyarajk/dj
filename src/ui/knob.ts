@@ -68,7 +68,7 @@ export class Knob {
     this.dial = h('div', { class: 'knob-dial', attrs: { role: 'slider', tabindex: '0', 'aria-label': options.label, 'aria-valuemin': '0', 'aria-valuemax': '1' } });
     this.dial.append(svg);
     this.readout = h('span', { class: 'knob-readout' });
-    this.el = h('div', { class: 'knob', title: `${options.label}: drag, scroll or use arrow keys; double-click resets` }, [
+    this.el = h('div', { class: 'knob', title: `${options.label}: drag, scroll or use arrow keys; double-click or Home resets` }, [
       h('span', { class: 'knob-label', text: options.label }),
       this.dial,
       this.readout,
@@ -120,10 +120,20 @@ export class Knob {
     );
     this.dial.addEventListener('keydown', (event) => {
       const step = event.shiftKey ? 0.01 : 0.05;
-      if (event.key === 'ArrowUp' || event.key === 'ArrowRight') this.change(this.position + step);
-      else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') this.change(this.position - step);
-      else if (event.key === 'Home' || event.key === 'Enter') this.change(this.options.resetTo);
-      else return;
+      const moves: Record<string, number> = {
+        ArrowUp: this.position + step,
+        ArrowRight: this.position + step,
+        ArrowDown: this.position - step,
+        ArrowLeft: this.position - step,
+        PageUp: this.position + 0.2,
+        PageDown: this.position - 0.2,
+        End: 1,
+        // Home resets (to centre for EQ and filter), matching double-click.
+        Home: this.options.resetTo,
+      };
+      const next = moves[event.key];
+      if (next === undefined) return;
+      this.change(next);
       // Keep the global shortcut map from also seeing this key.
       event.preventDefault();
       event.stopPropagation();

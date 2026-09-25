@@ -7,8 +7,16 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (analysis versioning, atomic read-modify-write, persistence request)
  */
 import type { SavedTrackData } from '../audio/deck-controller';
+
+/**
+ * Version of the analysis stored in a record. Bump it whenever BPM detection
+ * or the peaks format changes: older records then get re-analysed on their
+ * next load (keeping their cues and tags) instead of serving stale results.
+ */
+export const ANALYSIS_VERSION = 3;
 
 export interface CachedTrack extends SavedTrackData {
   key: string;
@@ -16,6 +24,13 @@ export interface CachedTrack extends SavedTrackData {
   artist: string;
   album: string;
   duration: number;
+  /** ANALYSIS_VERSION the bpm/firstBeat/peaks fields came from; absent on v1 records. */
+  analysisVersion?: number;
+}
+
+/** True when a record's analysis is current and can be used as is. */
+export function hasCurrentAnalysis(track: CachedTrack | null): boolean {
+  return Boolean(track?.peaks) && track?.analysisVersion === ANALYSIS_VERSION;
 }
 
 const DB_NAME = 'dj';
@@ -74,10 +89,44 @@ export async function putTrack(track: CachedTrack): Promise<void> {
   await run(TRACKS, 'readwrite', (s) => s.put(track));
 }
 
+/**
+ * Read-modify-write one record inside a single transaction, so two decks
+ * saving the same track cannot interleave and drop each other's changes.
+ *
+ * @param update receives the current record (or null) and returns the record
+ *   to store, or null to leave it unchanged.
+ */
+export async function updateTrack(key: string, update: (existing: CachedTrack | null) => CachedTrack | null): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(TRACKS, 'readwrite');
+    const store = tx.objectStore(TRACKS);
+    const read = store.get(key);
+    read.onsuccess = () => {
+      const next = update((read.result as CachedTrack | undefined) ?? null);
+      if (next) store.put({ ...next, key });
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
+  });
+}
+
 /** Merge fields into an existing record; does nothing if the track was never cached. */
 export async function patchTrack(key: string, patch: Partial<CachedTrack>): Promise<void> {
-  const existing = await getTrack(key);
-  if (existing) await putTrack({ ...existing, ...patch, key });
+  await updateTrack(key, (existing) => (existing ? { ...existing, ...patch } : null));
+}
+
+/**
+ * Ask the browser not to evict the cache under storage pressure. Without it,
+ * cues can disappear silently. Resolves false when refused or unsupported.
+ */
+export async function requestPersistence(): Promise<boolean> {
+  try {
+    return (await navigator.storage?.persist?.()) ?? false;
+  } catch {
+    return false;
+  }
 }
 
 export async function getSetting<T>(name: string): Promise<T | null> {

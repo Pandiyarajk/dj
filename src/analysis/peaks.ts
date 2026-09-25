@@ -6,8 +6,9 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (single streaming pass; per-band robust normalisation)
  */
-import { lowPass } from './filters';
+import { LowPass } from './filters';
 
 export interface Peaks {
   /** Bins per second of track time. */
@@ -21,24 +22,34 @@ export interface Peaks {
 /** Band edges in Hz: low < LOW_CUT <= mid < HIGH_CUT <= high. */
 const LOW_CUT = 200;
 const HIGH_CUT = 2000;
+/**
+ * Each band is scaled so this fraction of its bins fit below full scale.
+ * Normalising to the single loudest bin let one transient flatten the whole
+ * view; normalising all bands together let the bass hide the hats.
+ */
+const NORMALISE_PERCENTILE = 0.995;
+
+/** Value at `fraction` of the sorted distribution of `values` (ignores silence). */
+function percentile(values: Float32Array, fraction: number): number {
+  const audible = values.filter((v) => v > 1e-4);
+  if (audible.length === 0) return 0;
+  audible.sort();
+  return audible[Math.min(audible.length - 1, Math.floor(audible.length * fraction))];
+}
 
 /**
- * Compute per-band peak levels for a mono signal.
+ * Compute per-band peak levels for a mono signal in one streaming pass.
  *
  * @param samples mono PCM, -1..1.
  * @param sampleRate sample rate of `samples`.
  * @param binsPerSecond resolution of the summary.
- * @returns peaks normalised so the loudest bin of any band is 255.
  */
 export function computePeaks(samples: Float32Array, sampleRate: number, binsPerSecond = 150): Peaks {
-  const low = lowPass(samples, LOW_CUT, sampleRate);
-  const belowHigh = lowPass(samples, HIGH_CUT, sampleRate);
+  const lowFilter = new LowPass(LOW_CUT, sampleRate);
+  const belowHighFilter = new LowPass(HIGH_CUT, sampleRate);
   const binSize = Math.max(1, Math.round(sampleRate / binsPerSecond));
   const bins = Math.ceil(samples.length / binSize);
-  const lowPeak = new Float32Array(bins);
-  const midPeak = new Float32Array(bins);
-  const highPeak = new Float32Array(bins);
-  let max = 0;
+  const bands = [new Float32Array(bins), new Float32Array(bins), new Float32Array(bins)];
 
   for (let b = 0; b < bins; b++) {
     const end = Math.min(samples.length, (b + 1) * binSize);
@@ -46,25 +57,25 @@ export function computePeaks(samples: Float32Array, sampleRate: number, binsPerS
     let m = 0;
     let h = 0;
     for (let i = b * binSize; i < end; i++) {
-      const lv = Math.abs(low[i]);
-      const mv = Math.abs(belowHigh[i] - low[i]);
-      const hv = Math.abs(samples[i] - belowHigh[i]);
+      const x = samples[i];
+      const low = lowFilter.next(x);
+      const belowHigh = belowHighFilter.next(x);
+      const lv = Math.abs(low);
+      const mv = Math.abs(belowHigh - low);
+      const hv = Math.abs(x - belowHigh);
       if (lv > l) l = lv;
       if (mv > m) m = mv;
       if (hv > h) h = hv;
     }
-    lowPeak[b] = l;
-    midPeak[b] = m;
-    highPeak[b] = h;
-    max = Math.max(max, l, m, h);
+    bands[0][b] = l;
+    bands[1][b] = m;
+    bands[2][b] = h;
   }
 
-  const scale = max > 0 ? 255 / max : 0;
-  const quantise = (src: Float32Array): Uint8Array => Uint8Array.from(src, (v) => Math.round(v * scale));
-  return {
-    binsPerSecond: sampleRate / binSize,
-    low: quantise(lowPeak),
-    mid: quantise(midPeak),
-    high: quantise(highPeak),
-  };
+  const [low, mid, high] = bands.map((band) => {
+    const reference = percentile(band, NORMALISE_PERCENTILE);
+    const scale = reference > 0 ? 255 / reference : 0;
+    return Uint8Array.from(band, (v) => Math.min(255, Math.round(v * scale)));
+  });
+  return { binsPerSecond: sampleRate / binSize, low, mid, high };
 }

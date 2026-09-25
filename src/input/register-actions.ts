@@ -6,6 +6,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (hold CUE and hot cues, BPM x2 / /2, filter)
  */
 import { HOT_CUE_COUNT, LOOP_SIZES, type DeckController } from '../audio/deck-controller';
 import { EQ_MAX_DB, EQ_MIN_DB, TRIM_MAX_DB, TRIM_MIN_DB, type ChannelSettings, type EqBand, type MixerState } from '../audio/mixer';
@@ -29,7 +30,8 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     const press = (name: string, fn: () => void): void => actions.register(`${d}.${name}`, (v) => v > 0 && fn());
 
     press('play', () => deck.togglePlay());
-    press('cue', () => deck.cue());
+    // CUE and hot cues are hold actions: CDJ-style preview while held.
+    actions.register(`${d}.cue`, (v) => (v > 0 ? deck.cueDown() : deck.cueUp()));
     press('sync', () => sync.toggle(deck));
     press('quantize', () => deck.toggleQuantize());
     press('range', () => deck.cycleTempoRange());
@@ -42,9 +44,11 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     press('loop.double', () => deck.resizeLoop(2));
     press('jump.back', () => deck.beatJump(-1));
     press('jump.forward', () => deck.beatJump(1));
+    press('bpm.double', () => deck.scaleBpm(2));
+    press('bpm.halve', () => deck.scaleBpm(0.5));
     for (const size of LOOP_SIZES) press(`loop.${size}`, () => deck.autoLoop(size));
     for (let i = 0; i < HOT_CUE_COUNT; i++) {
-      press(`hotcue.${i + 1}`, () => deck.hotCue(i));
+      actions.register(`${d}.hotcue.${i + 1}`, (v) => (v > 0 ? deck.hotCueDown(i) : deck.hotCueUp(i)));
       press(`hotcue.${i + 1}.clear`, () => deck.clearHotCue(i));
     }
     // Hold actions: 1 on press, 0 on release.
@@ -57,6 +61,8 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     const m = `mixer.${deck.id}`;
     actions.register(`${m}.fader`, (v) => updateChannel(mixer, ch, (c) => ({ ...c, fader: v })));
     actions.register(`${m}.trim`, (v) => updateChannel(mixer, ch, (c) => ({ ...c, trimDb: centeredDbFromKnob(v, TRIM_MIN_DB, TRIM_MAX_DB) })));
+    // Filter knob: 0..1, 0.5 = off (see filterFrequencies).
+    actions.register(`${m}.filter`, (v) => updateChannel(mixer, ch, (c) => ({ ...c, filter: v * 2 - 1 })));
     actions.register(`${m}.cue`, (v) => v > 0 && updateChannel(mixer, ch, (c) => ({ ...c, cue: !c.cue })));
     for (const band of ['high', 'mid', 'low'] as EqBand[]) {
       actions.register(`${m}.eq.${band}`, (v) =>

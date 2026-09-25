@@ -2,13 +2,14 @@
  * Mixer state and the per-channel Web Audio strip.
  *
  * Signal path per channel:
- *   deck -> trim -> low shelf -> mid peak -> high shelf -> fader -> crossfader
- *                                                      '-> cue tap (pre-fader)
+ *   deck -> trim -> 3-band isolator -> filter -> fader -> crossfader
+ *                                            '-> cue tap (pre-fader)
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (isolator EQ with true kills, one-knob filter)
  */
-import { dbToGain, faderGain, type CrossfaderCurve } from './mixer-math';
+import { dbToGain, faderGain, filterFrequencies, type CrossfaderCurve } from './mixer-math';
 
 export type CueMode = 'off' | 'split' | 'quad';
 export type EqBand = 'high' | 'mid' | 'low';
@@ -17,6 +18,8 @@ export interface ChannelSettings {
   trimDb: number;
   eqDb: Record<EqBand, number>;
   kill: Record<EqBand, boolean>;
+  /** One-knob filter: -1 low-pass .. 0 off .. +1 high-pass. */
+  filter: number;
   /** Channel fader position, 0..1. */
   fader: number;
   /** Send this channel to the headphone cue bus. */
@@ -40,20 +43,20 @@ export const EQ_MIN_DB = -26;
 export const EQ_MAX_DB = 6;
 export const TRIM_MIN_DB = -12;
 export const TRIM_MAX_DB = 12;
-/** Gain a killed band is set to. */
-const KILL_DB = -48;
-
-const EQ_SETTINGS: Record<EqBand, { type: BiquadFilterType; frequency: number; q: number }> = {
-  low: { type: 'lowshelf', frequency: 200, q: 0.7 },
-  mid: { type: 'peaking', frequency: 1000, q: 0.5 },
-  high: { type: 'highshelf', frequency: 3500, q: 0.7 },
-};
+/** Isolator crossover frequencies, Hz: low | mid | high. */
+const CROSSOVER_LOW = 250;
+const CROSSOVER_HIGH = 2500;
+/** Butterworth Q; two in series make a 24 dB/octave Linkwitz-Riley crossover. */
+const BUTTERWORTH_Q = Math.SQRT1_2;
+/** Filter resonance: a little emphasis at the cutoff, the usual DJ-filter sound. */
+const FILTER_Q = 1.1;
 
 export function defaultChannel(): ChannelSettings {
   return {
     trimDb: 0,
     eqDb: { high: 0, mid: 0, low: 0 },
     kill: { high: false, mid: false, low: false },
+    filter: 0,
     fader: 0.8,
     cue: false,
   };
@@ -81,10 +84,12 @@ export class ChannelStrip {
   readonly output: GainNode;
   /** Pre-fader send to the cue bus. */
   readonly cueSend: GainNode;
-  private readonly eq: Record<EqBand, BiquadFilterNode>;
+  private readonly bands: Record<EqBand, GainNode>;
+  private readonly lowpass: BiquadFilterNode;
+  private readonly highpass: BiquadFilterNode;
   private readonly fader: GainNode;
 
-  constructor(private readonly ctx: AudioContext) {
+  constructor(private readonly ctx: BaseAudioContext) {
     this.input = ctx.createGain();
     this.fader = ctx.createGain();
     this.output = ctx.createGain();
@@ -93,16 +98,46 @@ export class ChannelStrip {
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 1024;
 
-    const make = (band: EqBand): BiquadFilterNode => {
-      const s = EQ_SETTINGS[band];
-      return new BiquadFilterNode(ctx, { type: s.type, frequency: s.frequency, Q: s.q, gain: 0 });
+    const biquad = (type: BiquadFilterType, frequency: number, q = BUTTERWORTH_Q): BiquadFilterNode =>
+      new BiquadFilterNode(ctx, { type, frequency, Q: q });
+    /** A 4th-order Linkwitz-Riley section: two Butterworth biquads in series. */
+    const lr4 = (type: 'lowpass' | 'highpass', frequency: number): [AudioNode, AudioNode] => {
+      const first = biquad(type, frequency);
+      const second = biquad(type, frequency);
+      first.connect(second);
+      return [first, second];
     };
-    this.eq = { low: make('low'), mid: make('mid'), high: make('high') };
 
-    this.input.connect(this.eq.low).connect(this.eq.mid).connect(this.eq.high);
-    this.eq.high.connect(this.fader).connect(this.output);
+    // Isolator: a proper 3-way crossover, so KILL removes the band entirely
+    // (a shelf at -48 dB left the low-mids and bass harmonics audible).
+    // The low band passes through the high crossover's all-pass (its LP plus
+    // HP) so all three bands stay in phase and sum flat at unity gain.
+    this.bands = { low: ctx.createGain(), mid: ctx.createGain(), high: ctx.createGain() };
+    const sum = ctx.createGain();
+    const [lowIn, lowOut] = lr4('lowpass', CROSSOVER_LOW);
+    const [restIn, restOut] = lr4('highpass', CROSSOVER_LOW);
+    this.input.connect(lowIn);
+    this.input.connect(restIn);
+    const [apLowIn, apLowOut] = lr4('lowpass', CROSSOVER_HIGH);
+    const [apHighIn, apHighOut] = lr4('highpass', CROSSOVER_HIGH);
+    lowOut.connect(apLowIn);
+    lowOut.connect(apHighIn);
+    apLowOut.connect(this.bands.low);
+    apHighOut.connect(this.bands.low);
+    const [midIn, midOut] = lr4('lowpass', CROSSOVER_HIGH);
+    const [highIn, highOut] = lr4('highpass', CROSSOVER_HIGH);
+    restOut.connect(midIn);
+    restOut.connect(highIn);
+    midOut.connect(this.bands.mid);
+    highOut.connect(this.bands.high);
+    for (const band of Object.values(this.bands)) band.connect(sum);
+
+    this.lowpass = biquad('lowpass', 22000, FILTER_Q);
+    this.highpass = biquad('highpass', 10, FILTER_Q);
+    sum.connect(this.lowpass).connect(this.highpass);
+    this.highpass.connect(this.fader).connect(this.output);
     this.fader.connect(this.analyser);
-    this.eq.high.connect(this.cueSend);
+    this.highpass.connect(this.cueSend);
   }
 
   private ramp(param: AudioParam, value: number): void {
@@ -113,8 +148,11 @@ export class ChannelStrip {
   apply(settings: ChannelSettings, crossfaderGain: number): void {
     this.ramp(this.input.gain, dbToGain(settings.trimDb));
     for (const band of ['low', 'mid', 'high'] as const) {
-      this.ramp(this.eq[band].gain, settings.kill[band] ? KILL_DB : settings.eqDb[band]);
+      this.ramp(this.bands[band].gain, settings.kill[band] ? 0 : dbToGain(settings.eqDb[band]));
     }
+    const { lowpass, highpass } = filterFrequencies(settings.filter ?? 0);
+    this.ramp(this.lowpass.frequency, Math.min(lowpass, this.ctx.sampleRate / 2 - 100));
+    this.ramp(this.highpass.frequency, highpass);
     this.ramp(this.fader.gain, faderGain(settings.fader));
     this.ramp(this.output.gain, crossfaderGain);
     this.ramp(this.cueSend.gain, settings.cue ? 1 : 0);

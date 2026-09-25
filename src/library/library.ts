@@ -7,6 +7,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (tagsKnown, independent scan and add-files jobs)
  */
 import { Store } from '../state/store';
 import { getSetting, getTrack, setSetting, trackKey } from './db';
@@ -22,6 +23,11 @@ export interface LibraryEntry {
   album: string;
   duration: number | null;
   bpm: number | null;
+  /**
+   * True once title/artist come from the file's tags (or the cache) rather
+   * than a guess from the file name. A guess must never be cached as the tags.
+   */
+  tagsKnown: boolean;
   /** Where the track comes from. */
   source: { kind: 'file'; getFile: () => Promise<File> } | { kind: 'demo'; spec: DemoSpec };
 }
@@ -41,7 +47,8 @@ const TAG_CONCURRENCY = 4;
 
 export class Library {
   readonly store = new Store<LibraryState>({ entries: [], status: 'No music loaded yet', busy: false, canReopen: false });
-  private generation = 0;
+  /** Bumped by each folder scan; an older scan and its tag reads stop. */
+  private scanGeneration = 0;
 
   constructor() {
     getSetting<FileSystemDirectoryHandle>(LAST_FOLDER)
@@ -63,6 +70,7 @@ export class Library {
       album: '',
       duration: spec.seconds,
       bpm: spec.bpm,
+      tagsKnown: true,
       source: { kind: 'demo', spec },
     }));
     const others = this.store.get().entries.filter((e) => e.source.kind !== 'demo');
@@ -104,18 +112,21 @@ export class Library {
       this.store.set({ status: 'No audio files chosen, nothing changed' });
       return;
     }
-    const entries = chosen.map((file) => fileEntry(`file:${file.name}:${file.size}`, file.name, async () => file));
+    const entries = chosen.map((file) => fileEntry(`file:${file.name}:${file.size}:${file.lastModified}`, file.name, async () => file));
     this.merge(entries, false);
-    await this.enrich(entries, ++this.generation);
+    // Not tied to the scan generation: adding files must not cancel a folder
+    // scan in progress, and a scan must not strand these files' tag reads.
+    await this.enrich(entries, () => true);
   }
 
   private async scanFolder(dir: FileSystemDirectoryHandle): Promise<void> {
-    const generation = ++this.generation;
+    const generation = ++this.scanGeneration;
+    const isCurrent = (): boolean => generation === this.scanGeneration;
     this.store.set({ busy: true, status: `Scanning "${dir.name}"...` });
     const found: LibraryEntry[] = [];
     try {
       for await (const { handle, path } of walkAudioFiles(dir)) {
-        if (generation !== this.generation) return;
+        if (!isCurrent()) return;
         found.push(fileEntry(`${dir.name}/${path}`, handle.name, () => handle.getFile()));
         if (found.length % 200 === 0) this.store.set({ status: `Scanning "${dir.name}": ${found.length} tracks...` });
       }
@@ -128,7 +139,7 @@ export class Library {
       this.store.set({ busy: false, status: `No audio files found in "${dir.name}"` });
       return;
     }
-    await this.enrich(found, generation);
+    await this.enrich(found, isCurrent);
   }
 
   /** Put entries in the table; a folder scan replaces earlier file entries. */
@@ -138,7 +149,7 @@ export class Library {
   }
 
   /** Fill in tags and cached BPMs, a few files at a time. */
-  private async enrich(entries: LibraryEntry[], generation: number): Promise<void> {
+  private async enrich(entries: LibraryEntry[], isCurrent: () => boolean): Promise<void> {
     this.store.set({ busy: true });
     let done = 0;
     let next = 0;
@@ -152,22 +163,23 @@ export class Library {
         return patch ? { ...e, ...patch, bpm: patch.bpm ?? e.bpm, duration: patch.duration ?? e.duration } : e;
       });
       updates.clear();
-      this.store.set({ entries: entriesNow, status: `Reading tags: ${done} of ${entries.length}` });
+      // A superseded job still lands its finished rows, but must not overwrite the current job's status.
+      this.store.set(isCurrent() ? { entries: entriesNow, status: `Reading tags: ${done} of ${entries.length}` } : { entries: entriesNow });
     };
     const timer = setInterval(flush, 300);
 
     const worker = async (): Promise<void> => {
-      while (next < entries.length && generation === this.generation) {
+      while (next < entries.length && isCurrent()) {
         const entry = entries[next++];
         if (entry.source.kind !== 'file') continue;
         try {
           const file = await entry.source.getFile();
           const cached = await getTrack(trackKey(file)).catch(() => null);
           if (cached) {
-            updates.set(entry.id, { title: cached.title, artist: cached.artist, album: cached.album, duration: cached.duration, bpm: cached.bpm });
+            updates.set(entry.id, { title: cached.title, artist: cached.artist, album: cached.album, duration: cached.duration, bpm: cached.bpm, tagsKnown: true });
           } else {
             const tags = await readTags(file);
-            updates.set(entry.id, { title: tags.title, artist: tags.artist, album: tags.album, duration: tags.duration, bpm: tags.bpm });
+            updates.set(entry.id, { title: tags.title, artist: tags.artist, album: tags.album, duration: tags.duration, bpm: tags.bpm, tagsKnown: true });
           }
         } catch {
           // Unreadable file: keep the name-based entry; loading it will report the error.
@@ -179,7 +191,7 @@ export class Library {
     await Promise.all(Array.from({ length: TAG_CONCURRENCY }, worker));
     clearInterval(timer);
     flush();
-    if (generation === this.generation) {
+    if (isCurrent()) {
       const total = this.store.get().entries.filter((e) => e.source.kind === 'file').length;
       this.store.set({ busy: false, status: `${total} track${total === 1 ? '' : 's'} in library` });
     }
@@ -188,7 +200,7 @@ export class Library {
 
 function fileEntry(id: string, name: string, getFile: () => Promise<File>): LibraryEntry {
   const tags = tagsFromFileName(name);
-  return { id, title: tags.title, artist: tags.artist, album: '', duration: null, bpm: null, source: { kind: 'file', getFile } };
+  return { id, title: tags.title, artist: tags.artist, album: '', duration: null, bpm: null, tagsKnown: false, source: { kind: 'file', getFile } };
 }
 
 export function errorText(error: unknown): string {

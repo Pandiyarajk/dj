@@ -5,7 +5,33 @@
  * Date: Sep-25-2026
  */
 import { describe, expect, it } from 'vitest';
-import { centeredDbFromKnob, crossfaderGains, dbToGain, faderGain, gainToDb, knobFromCenteredDb } from '../src/audio/mixer-math';
+import {
+  centeredDbFromKnob,
+  crossfaderGains,
+  dbToGain,
+  faderGain,
+  filterFrequencies,
+  FILTER_OPEN_HIGH,
+  FILTER_OPEN_LOW,
+  gainToDb,
+  knobFromCenteredDb,
+} from '../src/audio/mixer-math';
+
+describe('filterFrequencies', () => {
+  it('is open at and near centre', () => {
+    expect(filterFrequencies(0)).toEqual({ lowpass: FILTER_OPEN_LOW, highpass: FILTER_OPEN_HIGH });
+    expect(filterFrequencies(0.02)).toEqual({ lowpass: FILTER_OPEN_LOW, highpass: FILTER_OPEN_HIGH });
+  });
+
+  it('sweeps a low-pass down to the left and a high-pass up to the right', () => {
+    expect(filterFrequencies(-1).lowpass).toBeCloseTo(150, 6);
+    expect(filterFrequencies(1).highpass).toBeCloseTo(6000, 6);
+    expect(filterFrequencies(-0.5).lowpass).toBeLessThan(filterFrequencies(-0.25).lowpass);
+    expect(filterFrequencies(0.5).highpass).toBeGreaterThan(filterFrequencies(0.25).highpass);
+    expect(filterFrequencies(-0.5).highpass).toBe(FILTER_OPEN_HIGH);
+    expect(filterFrequencies(0.5).lowpass).toBe(FILTER_OPEN_LOW);
+  });
+});
 
 describe('crossfaderGains', () => {
   it('smooth curve is constant power across the whole throw', () => {

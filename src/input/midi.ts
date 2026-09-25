@@ -45,6 +45,8 @@ export const DEFAULT_MIDI_MAP: MidiBinding[] = [
   ...deckBindings('A', 0, 7),
   ...deckBindings('B', 1, 9),
   { kind: 'cc', channel: 6, number: 0x1f, action: 'mixer.xfader' },
+  { kind: 'cc', channel: 6, number: 0x17, action: 'mixer.A.filter' },
+  { kind: 'cc', channel: 6, number: 0x18, action: 'mixer.B.filter' },
 ];
 
 export interface MidiState {

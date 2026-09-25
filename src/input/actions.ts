@@ -6,6 +6,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (hold buttons work from the keyboard)
  */
 import { flash } from '../ui/dom';
 
@@ -51,13 +52,36 @@ export class Actions {
   button(name: string, el: HTMLButtonElement, hold = false): HTMLButtonElement {
     this.bind(name, el);
     if (hold) {
-      el.addEventListener('pointerdown', (event) => {
-        el.setPointerCapture(event.pointerId);
+      let held = false;
+      const press = (): void => {
+        if (held) return;
+        held = true;
         this.trigger(name, 1);
+      };
+      const release = (): void => {
+        if (!held) return;
+        held = false;
+        this.trigger(name, 0);
+      };
+      el.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        el.setPointerCapture(event.pointerId);
+        press();
       });
-      const release = (): void => this.trigger(name, 0);
       el.addEventListener('pointerup', release);
       el.addEventListener('pointercancel', release);
+      el.addEventListener('lostpointercapture', release);
+      // Keyboard users hold Enter or Space on the focused button.
+      el.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) press();
+      });
+      el.addEventListener('keyup', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') release();
+      });
+      el.addEventListener('blur', release);
     } else {
       el.addEventListener('click', () => this.trigger(name, 1));
     }

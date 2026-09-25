@@ -11,8 +11,9 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (phase meter, waveform zoom, drop guard, dismissable
+ *   error banner, shortcuts blocked behind the help dialog)
  */
-import { AnalysisClient } from './analysis/analysis-client';
 import { DeckController } from './audio/deck-controller';
 import { AudioEngine } from './audio/engine';
 import { defaultMixer, type MixerState } from './audio/mixer';
@@ -23,6 +24,7 @@ import { attachKeyboard } from './input/keyboard';
 import { MidiInput } from './input/midi';
 import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
+import { requestPersistence } from './library/db';
 import { TrackLoader } from './library/track-loader';
 import { Store } from './state/store';
 import { DeckView } from './ui/deck-view';
@@ -30,16 +32,34 @@ import { h, setClass, setText } from './ui/dom';
 import { HelpDialog } from './ui/help';
 import { LibraryView } from './ui/library-view';
 import { MixerView } from './ui/mixer-view';
-import { ScrollingWaveform } from './ui/waveform';
+import { PhaseMeter } from './ui/phase-meter';
+import { ScrollingWaveform, ZOOM_LEVELS } from './ui/waveform';
 
+/** Errors shown at most; older ones are dropped (they are also in the console). */
+const MAX_ERRORS = 5;
 const errors: string[] = [];
-const errorBanner = h('div', { class: 'error-banner', attrs: { role: 'alert' } });
+const errorList = h('div', { class: 'error-list' });
+const errorBanner = h('div', { class: 'error-banner', attrs: { role: 'alert' } }, [
+  errorList,
+  h('button', {
+    class: 'btn btn-small',
+    text: 'Dismiss',
+    attrs: { type: 'button' },
+    on: {
+      click: () => {
+        errors.length = 0;
+        errorBanner.classList.remove('visible');
+      },
+    },
+  }),
+]);
 
 function reportError(context: string, error: unknown): void {
   const message = `${context}: ${errorText(error)}`;
   if (errors.includes(message)) return;
   errors.push(message);
-  errorBanner.replaceChildren(...errors.map((e) => h('div', { text: e })));
+  if (errors.length > MAX_ERRORS) errors.splice(0, errors.length - MAX_ERRORS);
+  errorList.replaceChildren(...errors.map((e) => h('div', { text: e })));
   errorBanner.classList.add('visible');
   console.error(message, error);
 }
@@ -80,7 +100,8 @@ async function boot(): Promise<void> {
   const sync = new SyncCoordinator(decks);
   const library = new Library();
   library.addDemos(DEMO_TRACKS);
-  const loader = new TrackLoader(engine.ctx, new AnalysisClient(), library, decks);
+  const loader = new TrackLoader(engine.ctx, library, decks);
+  void requestPersistence();
   const actions = new Actions();
   registerActions(actions, decks, sync, mixer);
   const midi = new MidiInput(actions);
@@ -117,19 +138,50 @@ async function boot(): Promise<void> {
     h('div', { class: 'topbar-right' }, [midiStatus, midiButton, helpButton]),
   ]);
 
+  // Waveform zoom, shared by both decks so their beats line up on screen.
+  let zoomIndex = ZOOM_LEVELS.indexOf(8);
+  const zoomLabel = h('span', { class: 'zoom-label', attrs: { role: 'status' } });
+  const showZoom = (): void => setText(zoomLabel, `${ZOOM_LEVELS[zoomIndex]} s`);
+  const zoom = (step: -1 | 1): void => {
+    const next = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, zoomIndex + step));
+    // At a limit, say so: a press that changes nothing must still show it landed.
+    if (next === zoomIndex) setText(zoomLabel, `${ZOOM_LEVELS[zoomIndex]} s (${step < 0 ? 'closest' : 'widest'})`);
+    else {
+      zoomIndex = next;
+      showZoom();
+    }
+  };
+  actions.register('view.zoom.in', (v) => v > 0 && zoom(-1));
+  actions.register('view.zoom.out', (v) => v > 0 && zoom(1));
+  showZoom();
+  const zoomButton = (label: string, action: string, title: string): HTMLButtonElement =>
+    actions.button(action, h('button', { class: 'btn btn-tiny', text: label, title, attrs: { type: 'button', 'aria-label': title } }));
+
   const waveViews: Array<{ view: ScrollingWaveform; deck: DeckController }> = [];
-  const waves = h('section', { class: 'waves', attrs: { 'aria-label': 'Scrolling waveforms' } });
-  for (const deck of decks) {
+  const phaseMeter = start('Phase meter', () => new PhaseMeter(decks));
+  const waves = h('section', { class: 'waves', attrs: { 'aria-label': 'Scrolling waveforms' } }, [
+    h('div', { class: 'zoom-tools' }, [
+      zoomButton('+', 'view.zoom.in', 'Zoom in (=)'),
+      zoomLabel,
+      zoomButton('-', 'view.zoom.out', 'Zoom out (-)'),
+    ]),
+  ]);
+  decks.forEach((deck, i) => {
     start(`Waveform ${deck.id}`, () => {
       const canvas = h('canvas', { class: `wave wave-${deck.id.toLowerCase()}` });
       waves.append(h('div', { class: `wave-row wave-row-${deck.id.toLowerCase()}` }, [h('span', { class: 'wave-label', text: deck.id }), canvas]));
       waveViews.push({ view: new ScrollingWaveform(canvas), deck });
     });
-  }
+    if (i === 0 && phaseMeter) waves.append(phaseMeter.el);
+  });
 
   const deckViews = decks
     .map((deck) =>
-      start(`Deck ${deck.id}`, () => new DeckView(deck, actions, { onFile: (file) => void loader.loadFile(deck, file), onEntry: (id) => {
+      start(`Deck ${deck.id}`, () => new DeckView(deck, actions, { onFile: (file) => {
+        // Same guard as library loads: a drop must not replace a playing track.
+        if (deck.state.playing) deck.notice('Deck is playing: pause it before loading', 'warn');
+        else void loader.loadFile(deck, file);
+      }, onEntry: (id) => {
         const entry = entryById(id);
         if (entry) load(entry, deck);
         else deck.notice('That track is no longer in the library', 'warn');
@@ -154,7 +206,7 @@ async function boot(): Promise<void> {
   app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el);
 
   // ---- input ----
-  start('Keyboard', () => attachKeyboard(actions, () => help.toggle()));
+  start('Keyboard', () => attachKeyboard(actions, () => help.toggle(), () => help.el.open));
   const unlock = (): void => {
     void engine.resume();
   };
@@ -168,7 +220,8 @@ async function boot(): Promise<void> {
   let lastAudio = '';
   const frame = (): void => {
     try {
-      for (const { view, deck } of waveViews) view.draw(deck.state, deck.position());
+      for (const { view, deck } of waveViews) view.draw(deck.state, deck.position(), ZOOM_LEVELS[zoomIndex]);
+      phaseMeter?.frame();
       for (const view of deckViews) view.frame();
       mixerView?.frame();
       const audio = audioStatusText(engine);

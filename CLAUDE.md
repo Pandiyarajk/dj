@@ -56,3 +56,18 @@ registry shared by UI, keyboard and MIDI).
   swallows clicks.
 - Meters clip a full-height gradient (`clip-path`), never `scaleY` it, or the
   red band shows at every level.
+- BPM tests must include full-length tracks (4-10 min) and 4/4 above 140:
+  45 s clips hid a fixed-step drift that read 128 as 85.33, and halving.
+  Bump `ANALYSIS_VERSION` in `library/db.ts` whenever detection or peaks
+  change, or cached tracks keep the old results.
+- Analysis must stay streaming (`LowPass.next`): full-length filtered copies
+  cost ~1 GB for a 10-minute track.
+- Beat jump reads the position *before* moving the loop; loops are fitted
+  inside the track (`fitLoop`) or the worklet never wraps them.
+- Sliders sync from state unless dragged (`dragTracker`), never "unless
+  focused": a double-click reset left the thumb behind. A focused slider owns
+  only arrow keys, never the letter shortcuts.
+- The compressor's `reduction` freezes when its input goes silent: gate the
+  LIMIT light on signal.
+- `npm run e2e` has 36 checks; soak it (10+ runs) after touching sync, the
+  worklet or the library: several bugs here showed up 1 run in 5 to 1 in 12.

@@ -71,3 +71,31 @@ export function knobFromCenteredDb(db: number, minDb: number, maxDb: number): nu
   if (db < 0) return 0.5 * (1 - Math.max(minDb, db) / minDb);
   return 0.5 + 0.5 * (Math.min(maxDb, db) / maxDb);
 }
+
+export interface FilterSetting {
+  /** Low-pass cutoff, Hz; FILTER_OPEN_LOW means open. */
+  lowpass: number;
+  /** High-pass cutoff, Hz; FILTER_OPEN_HIGH means open. */
+  highpass: number;
+}
+
+/** Cutoffs that leave the audio band untouched. */
+export const FILTER_OPEN_LOW = 22000;
+export const FILTER_OPEN_HIGH = 10;
+/** Knob positions this close to centre bypass both filters. */
+const FILTER_DEAD_ZONE = 0.03;
+
+/**
+ * One-knob DJ filter: left of centre sweeps a low-pass down, right of centre
+ * sweeps a high-pass up, centre is flat. Both sweeps are logarithmic so the
+ * knob feels even across its travel.
+ *
+ * @param position -1 (low-pass at its lowest) .. 0 (off) .. +1 (high-pass at its highest).
+ */
+export function filterFrequencies(position: number): FilterSetting {
+  const p = Math.max(-1, Math.min(1, position));
+  if (Math.abs(p) < FILTER_DEAD_ZONE) return { lowpass: FILTER_OPEN_LOW, highpass: FILTER_OPEN_HIGH };
+  const amount = (Math.abs(p) - FILTER_DEAD_ZONE) / (1 - FILTER_DEAD_ZONE);
+  if (p < 0) return { lowpass: 20000 * Math.pow(150 / 20000, amount), highpass: FILTER_OPEN_HIGH };
+  return { lowpass: FILTER_OPEN_LOW, highpass: 20 * Math.pow(6000 / 20, amount) };
+}

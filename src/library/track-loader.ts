@@ -6,15 +6,17 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (atomic merged writes, analysis versioning, per-deck
+ *   cancellable analysis, flush on page hide, lower peak memory)
  */
-import type { AnalysisClient } from '../analysis/analysis-client';
+import { AnalysisClient, type AnalysisResult } from '../analysis/analysis-client';
 import type { DeckController, SavedTrackData, TrackInfo } from '../audio/deck-controller';
 import { renderDemo } from '../demo/demo-tracks';
-import { getTrack, patchTrack, putTrack, trackKey, type CachedTrack } from './db';
+import { ANALYSIS_VERSION, getTrack, hasCurrentAnalysis, patchTrack, trackKey, updateTrack, type CachedTrack } from './db';
 import { errorText, type Library, type LibraryEntry } from './library';
 import { readTags } from './metadata';
 
-/** Tags already known for a file (from the cache or the library row). */
+/** Tags already known for a file (from the cache or a tag-read library row). */
 interface TrackHint {
   title: string;
   artist: string;
@@ -24,23 +26,43 @@ interface TrackHint {
 /** Wait this long after the last cue change before writing it to the cache, ms. */
 const SAVE_DEBOUNCE_MS = 800;
 
+interface PendingCues {
+  cuePoint: number;
+  hotCues: (number | null)[];
+  deck: DeckController;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class TrackLoader {
   private readonly tokens = new Map<DeckController, number>();
   /** Library row currently on each deck, for BPM write-back. */
   private readonly rows = new Map<DeckController, string>();
+  /** One analysis worker per deck, so cancelling one load never stalls the other deck. */
+  private readonly analysers = new Map<DeckController, AnalysisClient>();
+  /** Unsaved cue edits per track key (not per deck: a deck may move on before the write). */
+  private readonly pendingCues = new Map<string, PendingCues>();
 
   constructor(
     private readonly ctx: BaseAudioContext,
-    private readonly analysis: AnalysisClient,
     private readonly library: Library,
     decks: DeckController[],
   ) {
-    for (const deck of decks) this.persistCues(deck);
+    for (const deck of decks) {
+      this.analysers.set(deck, new AnalysisClient());
+      this.persistCues(deck);
+    }
+    // The debounce would otherwise lose the last edit when the tab closes.
+    window.addEventListener('pagehide', () => this.flushCues());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.flushCues();
+    });
   }
 
   private begin(deck: DeckController): number {
     const token = (this.tokens.get(deck) ?? 0) + 1;
     this.tokens.set(deck, token);
+    // A superseded analysis would otherwise keep this deck's worker busy.
+    this.analysers.get(deck)?.cancel();
     return token;
   }
 
@@ -56,7 +78,9 @@ export class TrackLoader {
     deck.beginLoad(`Opening "${entry.title}"...`);
     try {
       const file = await entry.source.getFile();
-      if (this.current(deck, token)) await this.loadFileWith(deck, file, token, { title: entry.title, artist: entry.artist, album: entry.album });
+      // A row still showing a file-name guess is no hint: read the real tags.
+      const hint = entry.tagsKnown ? { title: entry.title, artist: entry.artist, album: entry.album } : null;
+      if (this.current(deck, token)) await this.loadFileWith(deck, file, token, hint);
     } catch (error) {
       if (this.current(deck, token)) deck.fail(`Could not open "${entry.title}": ${errorText(error)}`);
     }
@@ -76,7 +100,7 @@ export class TrackLoader {
       const [bytes, cached] = await Promise.all([file.arrayBuffer(), getTrack(key).catch(() => null)]);
       if (!this.current(deck, token)) return;
       deck.setStatusText('Decoding...');
-      let audio: AudioBuffer;
+      let audio: AudioBuffer | null;
       try {
         audio = await this.ctx.decodeAudioData(bytes);
       } catch {
@@ -86,13 +110,20 @@ export class TrackLoader {
 
       const tags: TrackHint = cached ?? hint ?? (await readTags(file));
       const info: TrackInfo = { key, title: tags.title, artist: tags.artist, duration: audio.duration };
-      deck.load(audio, info, cached);
-      if (cached?.peaks) return;
+      const upToDate = hasCurrentAnalysis(cached);
+      // Stale analysis (older detector or peaks format) is dropped; cues are kept.
+      const saved: SavedTrackData | null = cached && !upToDate ? { ...cached, bpm: null, peaks: null } : cached;
+      // Downmix before handing the buffer over, then let the AudioBuffer go:
+      // holding it through analysis doubled peak memory on long tracks.
+      const mono = upToDate ? null : downmix(audio);
+      const sampleRate = audio.sampleRate;
+      deck.load(audio, info, saved);
+      audio = null;
+      if (!mono) return;
 
-      const result = await this.analyse(deck, audio, token);
+      const result = await this.analyse(deck, mono, sampleRate, token);
       if (!result) return;
-      const record: CachedTrack = { ...info, album: tags.album, ...this.savedData(deck) };
-      await putTrack(record).catch((error) => console.warn('Track cache write failed', error));
+      this.saveAnalysis(deck, { ...info, album: tags.album }, result);
     } catch (error) {
       if (this.current(deck, token)) deck.fail(`Could not load "${file.name}": ${errorText(error)}`);
     }
@@ -108,18 +139,20 @@ export class TrackLoader {
     if (!this.current(deck, token)) return;
     try {
       const audio = renderDemo(spec, this.ctx);
+      const mono = downmix(audio);
       deck.load(audio, { key: `demo:${spec.id}`, title: spec.title, artist: 'Built-in demo', duration: audio.duration }, null);
-      await this.analyse(deck, audio, token);
+      await this.analyse(deck, mono, audio.sampleRate, token);
     } catch (error) {
       if (this.current(deck, token)) deck.fail(`Could not render demo: ${errorText(error)}`);
     }
   }
 
-  /** Analyse a decoded track and hand the result to the deck; null if superseded. */
-  private async analyse(deck: DeckController, audio: AudioBuffer, token: number) {
-    const mono = downmix(audio);
+  /** Analyse mono PCM (transferred to the worker) and hand the result to the deck; null if superseded. */
+  private async analyse(deck: DeckController, mono: Float32Array, sampleRate: number, token: number): Promise<AnalysisResult | null> {
+    const client = this.analysers.get(deck);
+    if (!client) return null;
     try {
-      const result = await this.analysis.analyse(mono, audio.sampleRate, (fraction) => {
+      const result = await client.analyse(mono, sampleRate, (fraction) => {
         if (this.current(deck, token)) deck.setAnalysisProgress(fraction);
       });
       if (!this.current(deck, token)) return null;
@@ -133,25 +166,49 @@ export class TrackLoader {
     }
   }
 
-  private savedData(deck: DeckController): SavedTrackData {
+  /**
+   * Store fresh analysis. Merges into any existing record in one transaction:
+   * the same track on the other deck may have saved cues in the meantime,
+   * and a whole-record write would erase them.
+   */
+  private saveAnalysis(deck: DeckController, info: Omit<CachedTrack, keyof SavedTrackData>, result: AnalysisResult): void {
     const s = deck.state;
-    return { bpm: s.bpm, firstBeat: s.firstBeat, peaks: s.peaks, cuePoint: s.cuePoint, hotCues: s.hotCues };
+    const analysis = { bpm: result.bpm, firstBeat: result.firstBeat, peaks: result.peaks, analysisVersion: ANALYSIS_VERSION };
+    updateTrack(info.key, (existing) =>
+      existing ? { ...existing, ...analysis } : { ...info, ...analysis, cuePoint: s.cuePoint, hotCues: s.hotCues },
+    ).catch((error) => this.saveFailed(deck, error));
   }
 
-  /** Write cue and hot-cue changes back to the cache, debounced. */
+  private saveFailed(deck: DeckController, error: unknown): void {
+    console.warn('Track cache write failed', error);
+    deck.notice('Could not save to the browser cache (storage full or blocked): cues will not be remembered', 'warn');
+  }
+
+  /** Write cue and hot-cue changes back to the cache, debounced per track. */
   private persistCues(deck: DeckController): void {
-    let timer: ReturnType<typeof setTimeout> | undefined;
     deck.store.subscribe((state, previous) => {
       const track = state.track;
       if (!track || track.key.startsWith('demo:') || state.track !== previous.track) return;
       if (state.hotCues === previous.hotCues && state.cuePoint === previous.cuePoint) return;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        patchTrack(track.key, { cuePoint: state.cuePoint, hotCues: state.hotCues }).catch((error) =>
-          console.warn('Cue cache write failed', error),
-        );
-      }, SAVE_DEBOUNCE_MS);
+      const pending = this.pendingCues.get(track.key);
+      if (pending) clearTimeout(pending.timer);
+      const timer = setTimeout(() => this.writeCues(track.key), SAVE_DEBOUNCE_MS);
+      this.pendingCues.set(track.key, { cuePoint: state.cuePoint, hotCues: state.hotCues, deck, timer });
     });
+  }
+
+  private writeCues(key: string): void {
+    const pending = this.pendingCues.get(key);
+    if (!pending) return;
+    this.pendingCues.delete(key);
+    clearTimeout(pending.timer);
+    patchTrack(key, { cuePoint: pending.cuePoint, hotCues: pending.hotCues }).catch((error) => this.saveFailed(pending.deck, error));
+  }
+
+  /** Write every pending cue edit now (page hidden or closing). */
+  flushCues(): void {
+    // Deleting visited entries while iterating a Map is safe.
+    for (const key of this.pendingCues.keys()) this.writeCues(key);
   }
 }
 

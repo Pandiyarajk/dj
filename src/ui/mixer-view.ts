@@ -4,13 +4,14 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (filter knob, limiter LED, faders synced unless dragged)
  */
 import type { AudioEngine } from '../audio/engine';
 import { EQ_MAX_DB, EQ_MIN_DB, TRIM_MAX_DB, TRIM_MIN_DB, type CueMode, type EqBand, type MixerState } from '../audio/mixer';
-import { centeredDbFromKnob, knobFromCenteredDb } from '../audio/mixer-math';
+import { centeredDbFromKnob, filterFrequencies, FILTER_OPEN_HIGH, FILTER_OPEN_LOW, knobFromCenteredDb } from '../audio/mixer-math';
 import type { Actions } from '../input/actions';
 import type { Store } from '../state/store';
-import { cssVar, h, setClass } from './dom';
+import { cssVar, dragTracker, h, setClass } from './dom';
 import { Knob } from './knob';
 import { Meter } from './meter';
 
@@ -22,8 +23,19 @@ function formatDb(db: number): string {
   return `${rounded > 0 ? '+' : ''}${rounded.toFixed(1)} dB`;
 }
 
+/** Filter knob readout: which filter is engaged and where. */
+function formatFilter(position: number): string {
+  const { lowpass, highpass } = filterFrequencies(position * 2 - 1);
+  const hz = (f: number): string => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f)}`);
+  if (lowpass < FILTER_OPEN_LOW) return `LPF ${hz(lowpass)}`;
+  if (highpass > FILTER_OPEN_HIGH) return `HPF ${hz(highpass)}`;
+  return 'off';
+}
+
 interface ChannelControls {
   trim: Knob;
+  filter: Knob;
+  faderDragging: () => boolean;
   eq: Record<EqBand, Knob>;
   kills: Record<EqBand, HTMLButtonElement>;
   cue: HTMLButtonElement;
@@ -36,6 +48,8 @@ export class MixerView {
   private readonly channels: ChannelControls[] = [];
   private readonly masterMeter: Meter;
   private readonly crossfader: HTMLInputElement;
+  private readonly crossfaderDragging: () => boolean;
+  private readonly limitLed: HTMLElement;
   private readonly curveButton: HTMLButtonElement;
   private readonly master: Knob;
   private readonly cueVolume: Knob;
@@ -65,6 +79,7 @@ export class MixerView {
       onInput: (p) => actions.trigger('mixer.cueVolume', p),
     });
     this.masterMeter = new Meter('Master');
+    this.limitLed = h('div', { class: 'limit-led', text: 'LIMIT', title: 'Lights while the master limiter is reducing gain: turn the channels or master down' });
 
     this.cueMode = h('select', { class: 'cue-mode', title: 'Headphone cue routing', attrs: { 'aria-label': 'Headphone cue routing' } });
     const modes: Array<[CueMode, string]> = [
@@ -86,6 +101,7 @@ export class MixerView {
       title: 'Crossfader. Double-click centres.',
       attrs: { type: 'range', min: '0', max: '1', step: '0.001', value: String((state.crossfader + 1) / 2), 'aria-label': 'Crossfader' },
     });
+    this.crossfaderDragging = dragTracker(this.crossfader);
     this.crossfader.addEventListener('input', () => actions.trigger('mixer.xfader', Number(this.crossfader.value)));
     this.crossfader.addEventListener('dblclick', () => actions.trigger('mixer.xfader.center'));
     this.curveButton = actions.button(
@@ -99,6 +115,7 @@ export class MixerView {
         h('div', { class: 'master-strip' }, [
           this.master.el,
           h('div', { class: 'master-meter' }, [this.masterMeter.el]),
+          this.limitLed,
           this.cueVolume.el,
           this.cueMode,
           this.cueHint,
@@ -153,13 +170,23 @@ export class MixerView {
     });
     fader.addEventListener('input', () => actions.trigger(`${m}.fader`, Number(fader.value)));
     fader.addEventListener('dblclick', () => actions.trigger(`${m}.fader`, 0.8));
+    const faderDragging = dragTracker(fader);
     const meter = new Meter(`Deck ${id}`);
-    this.channels[index] = { trim, eq, kills, cue, fader, meter };
+    const filter = new Knob({
+      label: 'FILTER',
+      value: (settings.filter + 1) / 2,
+      resetTo: 0.5,
+      format: formatFilter,
+      onInput: (p) => actions.trigger(`${m}.filter`, p),
+    });
+    filter.el.title = 'Filter: left is low-pass, right is high-pass, centre is off. Double-click resets.';
+    this.channels[index] = { trim, filter, faderDragging, eq, kills, cue, fader, meter };
 
     return h('div', { class: `channel-strip channel-${id.toLowerCase()}` }, [
       h('div', { class: 'channel-id', text: id }),
       trim.el,
       ...eqRows,
+      filter.el,
       cue,
       h('div', { class: 'fader-meter' }, [meter.el, fader]),
     ]);
@@ -169,17 +196,19 @@ export class MixerView {
     state.channels.forEach((settings, index) => {
       const c = this.channels[index];
       c.trim.setValue(knobFromCenteredDb(settings.trimDb, TRIM_MIN_DB, TRIM_MAX_DB));
+      c.filter.setValue((settings.filter + 1) / 2);
       for (const band of BANDS) {
         c.eq[band].setValue(knobFromCenteredDb(settings.eqDb[band], EQ_MIN_DB, EQ_MAX_DB));
         setClass(c.kills[band], 'on', settings.kill[band]);
       }
       setClass(c.cue, 'on', settings.cue);
       setClass(c.cue, 'inactive', state.cueMode === 'off');
-      if (document.activeElement !== c.fader) c.fader.value = String(settings.fader);
+      // Synced unless dragged: a focus guard left the thumb behind after a double-click reset.
+      if (!c.faderDragging()) c.fader.value = String(settings.fader);
     });
     this.master.setValue(state.master);
     this.cueVolume.setValue(state.cueVolume);
-    if (document.activeElement !== this.crossfader) this.crossfader.value = String((state.crossfader + 1) / 2);
+    if (!this.crossfaderDragging()) this.crossfader.value = String((state.crossfader + 1) / 2);
     this.curveButton.textContent = state.curve === 'smooth' ? 'Curve: smooth' : 'Curve: sharp';
     this.cueMode.value = state.cueMode;
     const anyCue = state.channels.some((c) => c.cue);
@@ -189,6 +218,11 @@ export class MixerView {
   /** Per-frame meter update. */
   frame(): void {
     this.channels.forEach((c, i) => c.meter.update(this.engine.meter(this.engine.strips[i].analyser)));
-    this.masterMeter.update(this.engine.meter(this.engine.masterAnalyser));
+    const master = this.engine.meter(this.engine.masterAnalyser);
+    this.masterMeter.update(master);
+    // The meter is post-limiter, so it never shows an over: this does. Only
+    // while there is signal: the compressor stops updating its reduction
+    // reading once its input goes silent, leaving the last value stuck.
+    setClass(this.limitLed, 'on', master.peak > 0.05 && this.engine.limiterReduction < -1);
   }
 }

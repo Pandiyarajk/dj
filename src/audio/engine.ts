@@ -4,6 +4,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (cue-bus limiter, gain-reduction reading, click-free re-route)
  */
 import deckProcessorUrl from './worklets/deck-processor.ts?worker&url';
 import { ChannelStrip, type CueMode, type MixerState } from './mixer';
@@ -23,6 +24,11 @@ export class AudioEngine {
   private readonly masterGain: GainNode;
   private readonly masterOut: GainNode;
   private readonly cueBus: GainNode;
+  private readonly limiter: DynamicsCompressorNode;
+  /** Gates between the buses and the output routing, ramped around a re-route. */
+  private readonly masterFade: GainNode;
+  private readonly cueFade: GainNode;
+  private routeTimer: ReturnType<typeof setTimeout> | undefined;
   private routing: AudioNode[] = [];
   private cueMode: CueMode | null = null;
   private readonly meterBuffer = new Float32Array(1024);
@@ -31,18 +37,30 @@ export class AudioEngine {
     this.strips = [new ChannelStrip(ctx), new ChannelStrip(ctx)];
     this.masterGain = ctx.createGain();
     // Safety limiter: two full-scale decks summed would otherwise clip.
-    const limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+    this.limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
     this.masterOut = ctx.createGain();
     this.masterAnalyser = ctx.createAnalyser();
     this.masterAnalyser.fftSize = 1024;
     this.cueBus = ctx.createGain();
+    // The cue bus is pre-fader with up to +12 dB of trim: limit it too, or two
+    // cued hot tracks clip hard in the headphones.
+    const cueLimiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+    this.masterFade = ctx.createGain();
+    this.cueFade = ctx.createGain();
 
     for (const strip of this.strips) {
       strip.output.connect(this.masterGain);
       strip.cueSend.connect(this.cueBus);
     }
-    this.masterGain.connect(limiter).connect(this.masterOut);
+    this.masterGain.connect(this.limiter).connect(this.masterOut);
     this.masterOut.connect(this.masterAnalyser);
+    this.masterOut.connect(this.masterFade);
+    this.cueBus.connect(cueLimiter).connect(this.cueFade);
+  }
+
+  /** Master limiter gain reduction right now, dB (0 or negative). */
+  get limiterReduction(): number {
+    return this.limiter.reduction;
   }
 
   /**
@@ -79,7 +97,7 @@ export class AudioEngine {
       const now = this.ctx.currentTime;
       this.masterGain.gain.setTargetAtTime(faderGain(state.master), now, 0.012);
       this.cueBus.gain.setTargetAtTime(faderGain(state.cueVolume), now, 0.012);
-      if (state.cueMode !== this.cueMode) this.route(state.cueMode === 'quad' && !this.supportsQuad ? 'off' : state.cueMode);
+      if (state.cueMode !== this.cueMode) this.reroute(state.cueMode === 'quad' && !this.supportsQuad ? 'off' : state.cueMode);
     };
     apply(store.get());
     store.subscribe(apply);
@@ -92,10 +110,23 @@ export class AudioEngine {
    * - split: one stereo output shared: cue (mono) left, master (mono) right.
    * - quad:  master on outputs 1/2, cue on 3/4 of a 4-channel device.
    */
+  /** Re-route without a click: fade out, rewire, fade back in. The first route is immediate. */
+  private reroute(mode: CueMode): void {
+    if (this.cueMode === null) return this.route(mode);
+    const now = this.ctx.currentTime;
+    for (const fade of [this.masterFade, this.cueFade]) fade.gain.setTargetAtTime(0, now, 0.004);
+    clearTimeout(this.routeTimer);
+    this.cueMode = mode;
+    this.routeTimer = setTimeout(() => {
+      this.route(mode);
+      const later = this.ctx.currentTime;
+      for (const fade of [this.masterFade, this.cueFade]) fade.gain.setTargetAtTime(1, later, 0.004);
+    }, 30);
+  }
+
   private route(mode: CueMode): void {
-    this.masterOut.disconnect();
-    this.masterOut.connect(this.masterAnalyser);
-    this.cueBus.disconnect();
+    this.masterFade.disconnect();
+    this.cueFade.disconnect();
     for (const node of this.routing) node.disconnect();
     this.routing = [];
     const destination = this.ctx.destination;
@@ -107,8 +138,8 @@ export class AudioEngine {
       const merger = this.ctx.createChannelMerger(4);
       const masterSplit = this.ctx.createChannelSplitter(2);
       const cueSplit = this.ctx.createChannelSplitter(2);
-      this.masterOut.connect(masterSplit);
-      this.cueBus.connect(cueSplit);
+      this.masterFade.connect(masterSplit);
+      this.cueFade.connect(cueSplit);
       masterSplit.connect(merger, 0, 0);
       masterSplit.connect(merger, 1, 1);
       cueSplit.connect(merger, 0, 2);
@@ -125,12 +156,12 @@ export class AudioEngine {
         const cueMono = toMono();
         const masterMono = toMono();
         const merger = this.ctx.createChannelMerger(2);
-        this.cueBus.connect(cueMono).connect(merger, 0, 0);
-        this.masterOut.connect(masterMono).connect(merger, 0, 1);
+        this.cueFade.connect(cueMono).connect(merger, 0, 0);
+        this.masterFade.connect(masterMono).connect(merger, 0, 1);
         merger.connect(destination);
         this.routing = [cueMono, masterMono, merger];
       } else {
-        this.masterOut.connect(destination);
+        this.masterFade.connect(destination);
       }
     }
     this.cueMode = mode;

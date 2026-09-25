@@ -139,6 +139,35 @@ async function click(scope, text, modifiers = 0) {
   }
 }
 
+/** Press or release (not both) the button in `scope` with text `text`. */
+async function pointer(scope, text, type) {
+  const rect = await evaluate(`(() => {
+    const el = [...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((b) => b.textContent.trim() === ${JSON.stringify(text)});
+    if (!el) return null;
+    // Only scroll on press: scrolling between press and release would move the target.
+    if (${JSON.stringify(type)} === 'mousePressed') el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  })()`);
+  if (!rect) throw new Error(`no button "${text}" in ${scope}`);
+  await send('Input.dispatchMouseEvent', { type, x: rect.x, y: rect.y, button: 'left', clickCount: 1 });
+}
+
+/** Average level, dB, of an analyser's bins below `hz`, over several reads. */
+const lowBandDb = (analyserExpr, hz) => `(async () => {
+  const a = ${analyserExpr};
+  a.smoothingTimeConstant = 0;
+  const bins = new Float32Array(a.frequencyBinCount);
+  const top = Math.max(1, Math.floor(${hz} / (window.dj.engine.ctx.sampleRate / a.fftSize)));
+  let sum = 0, n = 0;
+  for (let k = 0; k < 20; k++) {
+    a.getFloatFrequencyData(bins);
+    for (let i = 1; i <= top; i++) { sum += Math.pow(10, bins[i] / 10); n++; }
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return 10 * Math.log10(sum / n + 1e-20);
+})()`;
+
 async function key(code, keyName, modifiers = 0) {
   for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, code, key: keyName, modifiers });
 }
@@ -206,6 +235,21 @@ try {
   const drift = await evaluate(phaseExpr);
   check('still in phase 2 s after a tempo change', Math.abs(drift) < 0.02, `${(drift * 100).toFixed(2)}% of a beat`);
 
+  check('phase meter reads "In phase"', (await evaluate(`document.querySelector('.phase-label').textContent`)) === 'In phase');
+
+  // A quantized hot-cue jump on the synced deck keeps it in phase.
+  await click('.deck-b .pads', '5');
+  await sleep(1300);
+  await click('.deck-b .pads', '5');
+  await sleep(400);
+  const cuePhase = await evaluate(phaseExpr);
+  check('hot-cue jump on a synced deck stays in phase', Math.abs(cuePhase) < 0.02, `${(cuePhase * 100).toFixed(2)}% of a beat`);
+
+  // Moving the follower's own fader moves the shared tempo instead of dropping sync.
+  await evaluate(`${deckExpr(1)}.setTempo(0.02)`);
+  const shared = await evaluate(`({ synced: ${deckExpr(1)}.state.synced, a: ${deckExpr(0)}.effectiveBpm, b: ${deckExpr(1)}.effectiveBpm })`);
+  check('follower tempo fader moves both decks and keeps sync', shared.synced && Math.abs(shared.a - shared.b) < 0.01 && Math.abs(shared.b - 128 * 1.02) < 0.01, `${shared.a.toFixed(2)} / ${shared.b.toFixed(2)}`);
+
   // Press SYNC again: releases, and says so (a press must never look like nothing happened).
   await click('.deck-b', 'SYNC');
   const released = await evaluate(`({ synced: ${deckExpr(1)}.state.synced, notice: document.querySelector('.deck-b .deck-status').textContent })`);
@@ -227,6 +271,14 @@ try {
     await sleep(100);
   }
   check('auto loop wraps and stays inside', loop && wrapped && inside, loop ? `${loop.start.toFixed(3)}-${loop.end.toFixed(3)} s` : 'no loop');
+  // Beat jump back inside a loop: exactly 4 beats, and the loop moves with it.
+  const before = await evaluate(`${deckExpr(0)}.report.frame / window.dj.engine.ctx.sampleRate`);
+  await click('.deck-a .loop-row', '<< JUMP');
+  await sleep(250);
+  const moved = await evaluate(`({ loop: ${deckExpr(0)}.state.loop, pos: ${deckExpr(0)}.report.frame / window.dj.engine.ctx.sampleRate })`);
+  const fourBeats = (4 * 60) / (await evaluate(`${deckExpr(0)}.state.bpm`));
+  const shift = loop.start - moved.loop.start;
+  check('beat jump in a loop moves the loop 4 beats and stays inside it', Math.abs(shift - fourBeats) < 1e-6 && moved.pos >= moved.loop.start - 0.01 && moved.pos <= moved.loop.end + 0.01, `loop moved ${shift.toFixed(3)} s, head ${moved.pos.toFixed(2)} in ${moved.loop.start.toFixed(2)}-${moved.loop.end.toFixed(2)} (was ${before.toFixed(2)})`);
   await click('.deck-a .loop-row', '4');
   check('same loop size again exits the loop', (await evaluate(`${deckExpr(0)}.state.loop`)) === null);
 
@@ -241,8 +293,14 @@ try {
   const kills = await evaluate(`[...document.querySelectorAll('.channel-a .btn-kill')].length`);
   await evaluate(`document.querySelectorAll('.channel-a .btn-kill')[2].scrollIntoView({ block: 'center' })`);
   const killRect = await evaluate(`(() => { const r = document.querySelectorAll('.channel-a .btn-kill')[2].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  // Below 100 Hz: a 24 dB/octave isolator crossing over at 250 Hz attenuates
+  // less close to the crossover, so bins near it would understate the kill.
+  const lowBefore = await evaluate(lowBandDb('window.dj.engine.strips[0].analyser', 100));
   for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...killRect, button: 'left', clickCount: 1 });
   check('low kill button toggles the low kill', kills === 3 && (await evaluate('window.dj.mixer.get().channels[0].kill.low')) === true);
+  await sleep(200);
+  const lowAfter = await evaluate(lowBandDb('window.dj.engine.strips[0].analyser', 100));
+  check('low kill removes the low band (isolator)', lowBefore - lowAfter > 25, `${lowBefore.toFixed(1)} dB -> ${lowAfter.toFixed(1)} dB below 100 Hz`);
   await evaluate('document.activeElement && document.activeElement.blur()');
   await key('ArrowLeft', 'ArrowLeft');
   check('Left arrow moves the crossfader towards A', Math.abs((await evaluate('window.dj.mixer.get().crossfader')) + 0.1) < 1e-9);
@@ -260,6 +318,50 @@ try {
   await evaluate(`window.dj.mixer.set({ cueMode: 'off' })`);
   check('split cue routing keeps master audible', splitPeak > 0.05, `peak ${splitPeak.toFixed(3)}`);
   check('4-channel cue offered only when the device has 4 outputs', quadOption);
+
+  // Touching a fader must not kill the shortcuts, and a double-click reset must move the thumb.
+  const faderRect = await evaluate(`(() => { const f = document.querySelector('.deck-b .tempo-fader'); f.scrollIntoView({ block: 'center' }); const r = f.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height * 0.3 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...faderRect, button: 'left', clickCount: 1 });
+  const playingBefore = await evaluate(`${deckExpr(1)}.state.playing`);
+  await key('KeyP', 'p');
+  check('shortcuts still work after touching a fader', (await evaluate(`${deckExpr(1)}.state.playing`)) === !playingBefore);
+  for (const count of [1, 2]) {
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...faderRect, button: 'left', clickCount: count });
+  }
+  await sleep(100);
+  const reset = await evaluate(`({ tempo: ${deckExpr(1)}.state.tempo, thumb: document.querySelector('.deck-b .tempo-fader').value })`);
+  check('double-click resets tempo and moves the thumb', reset.tempo === 0 && Number(reset.thumb) === 0.5, `tempo ${reset.tempo}, thumb ${reset.thumb}`);
+
+  // Half/double-time correction.
+  const bpmB = await evaluate(`${deckExpr(1)}.state.bpm`);
+  await click('.deck-b .bpm-tools', '/2');
+  const halved = await evaluate(`${deckExpr(1)}.state.bpm`);
+  await click('.deck-b .bpm-tools', 'x2');
+  check('BPM /2 and x2 buttons', halved === bpmB / 2 && (await evaluate(`${deckExpr(1)}.state.bpm`)) === bpmB, `${bpmB} -> ${halved} -> back`);
+
+  // Shortcuts are blocked while the help dialog is open.
+  const aPlaying = await evaluate(`${deckExpr(0)}.state.playing`);
+  await key('Slash', '?', 8);
+  await key('KeyQ', 'q');
+  const blocked = await evaluate(`({ open: document.querySelector('dialog.help').open, playing: ${deckExpr(0)}.state.playing })`);
+  await evaluate(`document.querySelector('dialog.help').close()`);
+  check('help dialog blocks deck shortcuts', blocked.open && blocked.playing === aPlaying);
+
+  // Track-end warning near the end of a playing track.
+  await evaluate(`(() => { const d = ${deckExpr(0)}; if (!d.state.playing) d.play(); d.seek(d.duration - 20); })()`);
+  await sleep(400);
+  check('track-end warning shows with 20 s left', await evaluate(`document.querySelector('.deck-a').classList.contains('ending')`));
+
+  // CUE on a stopped deck previews while held and returns on release.
+  await evaluate(`${deckExpr(0)}.pause()`);
+  await sleep(100);
+  await pointer('.deck-a .transport', 'CUE', 'mousePressed');
+  await sleep(600);
+  const holding = await evaluate(`({ playing: ${deckExpr(0)}.state.playing, cue: ${deckExpr(0)}.state.cuePoint })`);
+  await pointer('.deck-a .transport', 'CUE', 'mouseReleased');
+  await sleep(200);
+  const afterCue = await evaluate(`({ playing: ${deckExpr(0)}.state.playing, pos: ${deckExpr(0)}.renderPosition() })`);
+  check('CUE held on a stopped deck previews, release returns to the cue', holding.playing && !afterCue.playing && Math.abs(afterCue.pos - holding.cue) < 0.02, `held playing ${holding.playing}, released at ${afterCue.pos.toFixed(3)} vs cue ${holding.cue.toFixed(3)}`);
 
   // ---- library, decode and the IndexedDB cache (a real file, not a demo) ----
   // 20 s, 100 BPM click WAV with the first beat at 0.25 s, built in the page.
@@ -293,7 +395,7 @@ try {
     for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...rowRect, button: 'left', clickCount: 1 });
   };
 
-  await click('.deck-a', 'PAUSE');
+  await evaluate(`${deckExpr(0)}.pause()`);
   await addAndLoad();
   await waitFor(`${deckExpr(0)}.state.track?.title === 'Click Track' && ${deckExpr(0)}.state.analysis === null && ${deckExpr(0)}.state.status === 'ready'`, 20000, 'file loaded and analysed');
   // The row re-renders on the next animation frame; wait for it rather than racing it.

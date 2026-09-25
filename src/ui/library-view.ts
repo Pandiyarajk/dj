@@ -12,6 +12,7 @@ import { ENTRY_DRAG_TYPE } from './deck-view';
 import { h, setText } from './dom';
 
 type SortKey = 'title' | 'artist' | 'bpm' | 'duration';
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 /** Rows rendered at most; the rest are reachable by searching. */
 const MAX_ROWS = 500;
 
@@ -132,7 +133,9 @@ export class LibraryView {
       // Unknown values sort last in either direction.
       if (x === null || x === '') return y === null || y === '' ? 0 : 1;
       if (y === null || y === '') return -1;
-      return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * direction;
+      // Natural order: "Track 2" before "Track 10".
+      const order = typeof x === 'number' && typeof y === 'number' ? x - y : collator.compare(String(x), String(y));
+      return order * direction;
     });
     return matches;
   }
@@ -186,7 +189,7 @@ export class LibraryView {
         class: `btn btn-load btn-load-${deck.toLowerCase()}`,
         text: deck,
         title: `Load onto deck ${deck}`,
-        attrs: { type: 'button' },
+        attrs: { type: 'button', 'aria-label': `Load ${entry.title} onto deck ${deck}` },
         on: { click: () => this.handlers.load(current(), deck) },
       });
     const cells = [h('td', { class: 'col-title' }), h('td', { class: 'col-artist' }), h('td', { class: 'col-num' }), h('td', { class: 'col-num' })];

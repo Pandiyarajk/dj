@@ -6,13 +6,18 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (loop validation, phase-preserving jumps, CDJ-style
+ *   hold-to-preview cue and hot-cue gate, auto cue, BPM x2 / /2, seq on
+ *   play/pause, loop-aware heard position)
  */
+import { autoCuePoint } from '../analysis/auto-cue';
+import type { Peaks } from '../analysis/peaks';
 import { Store } from '../state/store';
 import type { AudioEngine } from './engine';
+import { fitLoop, phasePreservingTarget } from './loops';
 import type { ChannelStrip } from './mixer';
 import { beatLength, snapToBeat, TEMPO_RANGES, type BeatGrid } from './sync';
 import type { DeckCommand, DeckReport } from './worklets/deck-processor';
-import type { Peaks } from '../analysis/peaks';
 
 export type DeckId = 'A' | 'B';
 export const HOT_CUE_COUNT = 8;
@@ -21,6 +26,10 @@ export const LOOP_SIZES = [1, 2, 4, 8, 16] as const;
 const BEND = 0.04;
 /** How long a transient notice stays up, ms. */
 const NOTICE_MS = 3000;
+/** Positions this close to the cue point count as "at the cue", seconds. */
+const AT_CUE = 0.02;
+/** BPM overrides stay within this range. */
+const BPM_LIMITS = [40, 250] as const;
 
 export interface TrackInfo {
   /** Stable identity used as the cache key (see library/db). */
@@ -56,6 +65,12 @@ export interface DeckState {
   notice: { text: string; level: 'info' | 'warn' } | null;
   track: TrackInfo | null;
   playing: boolean;
+  /**
+   * Held preview: 'cue' while CUE is held on a stopped deck, or a hot-cue
+   * index while its pad is held. Releasing returns to the point and stops;
+   * pressing PLAY during the hold keeps playing.
+   */
+  previewing: 'cue' | number | null;
   /** Tempo fader offset, fraction (0.02 = +2%). */
   tempo: number;
   tempoRange: number;
@@ -85,6 +100,7 @@ function initialState(): DeckState {
     notice: null,
     track: null,
     playing: false,
+    previewing: null,
     tempo: 0,
     tempoRange: TEMPO_RANGES[0],
     bend: 0,
@@ -103,8 +119,17 @@ function initialState(): DeckState {
   };
 }
 
+/** Hooks the sync coordinator installs so deck actions keep a synced mix locked. */
+export interface SyncHooks {
+  /** A synced deck's own tempo fader moved: returns true if sync handled it. */
+  manualTempo(tempo: number): boolean;
+  /** A synced deck jumped without quantize: put it back in phase. */
+  realign(): void;
+}
+
 export class DeckController {
   readonly store = new Store<DeckState>(initialState());
+  syncHooks: SyncHooks | null = null;
   private readonly node: AudioWorkletNode;
   private readonly sampleRate: number;
   private lengthFrames = 0;
@@ -112,6 +137,8 @@ export class DeckController {
   private report = { frame: 0, time: 0, playing: false };
   private seq = 0;
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** False until the user sets a cue point on this track; until then it follows the auto cue. */
+  private cueChosen = false;
 
   constructor(
     readonly id: DeckId,
@@ -133,13 +160,13 @@ export class DeckController {
   }
 
   private onReport(report: DeckReport): void {
+    // A report from before our latest seek, play or pause describes a state we left.
+    if (report.seq < this.seq) return;
     if (report.type === 'ended') {
-      this.store.set({ playing: false });
+      this.store.set({ playing: false, previewing: null });
       this.notice('End of track');
       return;
     }
-    // A report from before our latest seek describes a position we left.
-    if (report.seq < this.seq) return;
     this.report = { frame: report.frame, time: report.time, playing: report.playing };
   }
 
@@ -197,8 +224,9 @@ export class DeckController {
   load(buffer: AudioBuffer, info: TrackInfo, saved: SavedTrackData | null): void {
     this.pause();
     const left = buffer.getChannelData(0).slice();
-    const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1).slice() : left.slice();
-    this.send({ type: 'load', left, right }, [left.buffer, right.buffer]);
+    // Mono tracks send one buffer; the processor plays it on both sides.
+    const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1).slice() : undefined;
+    this.send({ type: 'load', left, right }, right ? [left.buffer, right.buffer] : [left.buffer]);
     this.lengthFrames = buffer.length;
     this.seq++;
     this.send({ type: 'seek', frame: 0, seq: this.seq });
@@ -208,11 +236,13 @@ export class DeckController {
     const bpm = saved?.bpm ?? null;
     // Cached peaks mean analysis already ran, even if it found no steady beat.
     const analysed = Boolean(saved?.peaks);
+    this.cueChosen = (saved?.cuePoint ?? 0) > 0;
     this.store.set({
       status: 'ready',
-      statusText: analysed ? (bpm !== null ? 'Ready' : 'Ready (no steady beat found)') : 'Analysing...',
+      statusText: analysed ? readyText(bpm) : 'Analysing...',
       track: info,
       playing: false,
+      previewing: null,
       bpm,
       firstBeat: saved?.firstBeat ?? 0,
       peaks: saved?.peaks ?? null,
@@ -224,6 +254,7 @@ export class DeckController {
       loopIn: null,
       synced: false,
     });
+    if (analysed) this.applyAutoCue();
   }
 
   setAnalysisProgress(fraction: number): void {
@@ -236,22 +267,43 @@ export class DeckController {
       firstBeat: result.firstBeat,
       peaks: result.peaks,
       analysis: null,
-      statusText: result.bpm === null ? 'Ready (no steady beat found)' : 'Ready',
+      statusText: readyText(result.bpm),
     });
+    this.applyAutoCue();
+  }
+
+  /**
+   * Cue to the first beat of the music, as DJ software does, unless the user
+   * picked a cue point. Moves a stopped deck still at the start there too, so
+   * the first PLAY does not start in leading silence.
+   */
+  private applyAutoCue(): void {
+    const { peaks, playing } = this.state;
+    if (this.cueChosen || !peaks) return;
+    const point = autoCuePoint(peaks, this.grid);
+    if (point <= 0) return;
+    this.store.set({ cuePoint: point });
+    if (!playing && this.renderPosition() < 0.05) this.seek(point);
   }
 
   // ---- position -------------------------------------------------------------
 
-  /** Playhead at render time, frames. Use for sync maths. */
+  /** Playhead at render time, frames, `latency` seconds earlier. Use latency 0 for sync maths. */
   private renderFrame(latency = 0, at = this.engine.ctx.currentTime): number {
     const { frame, time, playing } = this.report;
+    const rate = this.sampleRate * this.rate;
     let f = frame;
-    if (playing) f += (at - time - latency) * this.sampleRate * this.rate;
+    if (playing) f += (at - time) * rate;
     const loop = this.state.loop;
-    if (loop) {
-      const start = loop.start * this.sampleRate;
-      const end = loop.end * this.sampleRate;
-      if (f >= end && end > start) f = start + ((f - start) % (end - start));
+    const start = loop ? loop.start * this.sampleRate : 0;
+    const end = loop ? loop.end * this.sampleRate : 0;
+    const looping = loop !== null && end > start && frame < end;
+    if (looping && f >= end) f = start + ((f - start) % (end - start));
+    if (playing && latency > 0) {
+      // Step back after wrapping, so just after a wrap the heard position is
+      // near the loop end, not before the loop start.
+      f -= latency * rate;
+      if (looping && f < start) f += end - start;
     }
     return Math.max(0, Math.min(this.lengthFrames, f));
   }
@@ -277,13 +329,39 @@ export class DeckController {
    * @param seconds target track position.
    * @param at context time `seconds` refers to (see DeckCommand 'seek'); omit
    *   for "wherever the head is when the jump lands".
+   * @param keepLoop keep an active loop even if the target is outside it.
+   *   Otherwise a target outside the loop exits it: the audio thread would
+   *   fold it straight back into the loop, landing at a random point.
    */
-  seek(seconds: number, at?: number): void {
+  seek(seconds: number, at?: number, keepLoop = false): void {
     if (!this.loaded) return;
+    const loop = this.state.loop;
+    if (loop && !keepLoop && (seconds < loop.start || seconds >= loop.end)) this.setLoop(null);
     const frame = Math.max(0, Math.min(this.lengthFrames - 1, seconds * this.sampleRate));
     this.seq++;
     this.send({ type: 'seek', frame, seq: this.seq, at });
     this.report = { frame, time: at ?? this.engine.ctx.currentTime, playing: this.state.playing };
+  }
+
+  /**
+   * A user jump (hot cue, waveform click). With quantize on, a playing deck
+   * keeps its beat phase, so a mix that was on the beat (or synced) stays there.
+   */
+  jump(seconds: number): void {
+    if (!this.loaded) return;
+    const grid = this.grid;
+    const { playing, quantize, synced } = this.state;
+    if (playing && quantize && grid) {
+      // The target is where the head should be *now*; stamp the seek with that
+      // instant so the audio thread adds the playback that happens before the
+      // jump lands (message latency plus the de-click ramp). Without it the
+      // deck landed 1-3.4% of a beat late and a synced mix drifted out.
+      const at = this.now();
+      this.seek(Math.min(this.duration - 0.01, phasePreservingTarget(grid, this.renderPosition(at), seconds)), at);
+      return;
+    }
+    this.seek(seconds);
+    if (playing && synced) this.syncHooks?.realign();
   }
 
   private snap(seconds: number, mode: 'nearest' | 'floor' = 'nearest'): number {
@@ -300,24 +378,36 @@ export class DeckController {
     }
     void this.engine.resume();
     this.report = { frame: this.renderFrame(), time: this.engine.ctx.currentTime, playing: true };
-    this.send({ type: 'play' });
+    this.seq++;
+    this.send({ type: 'play', seq: this.seq });
     this.store.set({ playing: true });
   }
 
   pause(): void {
     if (!this.state.playing) return;
     this.report = { frame: this.renderFrame(), time: this.engine.ctx.currentTime, playing: false };
-    this.send({ type: 'pause' });
-    this.store.set({ playing: false });
+    this.seq++;
+    this.send({ type: 'pause', seq: this.seq });
+    this.store.set({ playing: false, previewing: null });
   }
 
   togglePlay(): void {
-    if (this.state.playing) this.pause();
-    else this.play();
+    if (this.state.previewing !== null) {
+      // PLAY during a held CUE or hot cue: keep playing when it is released.
+      this.store.set({ previewing: null });
+      this.notice('Playing');
+    } else if (this.state.playing) {
+      this.pause();
+    } else {
+      this.play();
+    }
   }
 
-  /** CDJ-style cue: playing -> back to the cue point and stop; stopped -> set the cue point here. */
-  cue(): void {
+  /**
+   * CUE pressed. Playing: back to the cue point and stop. Stopped: set the cue
+   * point here (if elsewhere) and preview from it while held.
+   */
+  cueDown(): void {
     if (!this.loaded) {
       this.notice('Load a track first', 'warn');
       return;
@@ -326,40 +416,66 @@ export class DeckController {
       this.pause();
       this.seek(this.state.cuePoint);
       this.notice('Back to cue');
-    } else {
-      const point = this.snap(this.position());
-      this.store.set({ cuePoint: point });
-      this.seek(point);
-      this.notice(`Cue set at ${formatTime(point)}`);
+      return;
     }
+    const here = this.position();
+    if (Math.abs(here - this.state.cuePoint) > AT_CUE) {
+      const point = this.snap(here);
+      this.cueChosen = true;
+      this.store.set({ cuePoint: point });
+      this.notice(`Cue set at ${formatTime(point)}`);
+    } else {
+      this.notice('Cue preview (release to return)');
+    }
+    this.seek(this.state.cuePoint);
+    this.play();
+    this.store.set({ previewing: 'cue' });
+  }
+
+  /** CUE released: end a preview (unless PLAY latched it). */
+  cueUp(): void {
+    if (this.state.previewing !== 'cue') return;
+    this.pause();
+    this.seek(this.state.cuePoint);
   }
 
   // ---- tempo ----------------------------------------------------------------
 
-  /** Tempo from the fader: a manual change drops sync. */
+  /** Tempo from the fader. On a synced deck, sync decides (it moves the shared tempo). */
   setTempo(tempo: number): void {
-    if (this.state.synced) this.notice('Sync off (tempo moved)');
+    if (this.state.synced && this.syncHooks?.manualTempo(tempo)) return;
     this.applyTempo(tempo, false);
   }
 
-  /** Tempo without touching sync; used by the sync coordinator. */
-  applyTempo(tempo: number, keepSync = true): void {
+  /**
+   * Tempo without the sync hook; used by the sync coordinator.
+   *
+   * @returns false when the tempo had to be clamped to the fader range.
+   */
+  applyTempo(tempo: number, keepSync = true): boolean {
     const range = this.state.tempoRange;
     const clamped = Math.max(-range, Math.min(range, tempo));
     this.store.set({ tempo: clamped, synced: keepSync && this.state.synced });
     this.send({ type: 'rate', rate: this.rate });
+    return Math.abs(clamped - tempo) < 1e-9;
   }
 
   setTempoRange(range: number): void {
     this.store.set({ tempoRange: range });
-    if (Math.abs(this.state.tempo) > range) this.applyTempo(this.state.tempo);
+    if (Math.abs(this.state.tempo) > range) {
+      // Narrowing the range under a synced deck clamps its tempo: it can no
+      // longer follow, so say so rather than drift while showing SYNC.
+      const wasSynced = this.state.synced;
+      this.applyTempo(this.state.tempo, false);
+      if (wasSynced) this.notice('Sync off: tempo is outside the new range', 'warn');
+    }
   }
 
   cycleTempoRange(): void {
     const index = TEMPO_RANGES.indexOf(this.state.tempoRange as (typeof TEMPO_RANGES)[number]);
     const next = TEMPO_RANGES[(index + 1) % TEMPO_RANGES.length];
     this.setTempoRange(next);
-    this.notice(`Tempo range +/-${Math.round(next * 100)}%`);
+    if (this.state.notice?.level !== 'warn') this.notice(`Tempo range +/-${Math.round(next * 100)}%`);
   }
 
   resetTempo(): void {
@@ -381,10 +497,35 @@ export class DeckController {
     this.notice(this.state.quantize ? 'Quantize on' : 'Quantize off');
   }
 
+  /**
+   * Correct a half- or double-time BPM reading. The grid anchor is kept, so
+   * beats stay where they were (doubling adds the off-beats).
+   */
+  scaleBpm(factor: 2 | 0.5): void {
+    const bpm = this.state.bpm;
+    if (!this.loaded || bpm === null) {
+      this.notice('No BPM to change yet', 'warn');
+      return;
+    }
+    const next = bpm * factor;
+    if (next < BPM_LIMITS[0] || next > BPM_LIMITS[1]) {
+      this.notice(`BPM would be ${next.toFixed(1)}: out of range`, 'warn');
+      return;
+    }
+    const loop = this.state.loop;
+    this.store.set({ bpm: next });
+    // An auto loop's length was in beats of the old tempo; keep it as audio.
+    if (loop?.beats) this.store.set({ loop: { ...loop, beats: loop.beats * factor } });
+    this.notice(`BPM ${factor > 1 ? 'doubled' : 'halved'} to ${next.toFixed(2)}`);
+  }
+
   // ---- hot cues -------------------------------------------------------------
 
-  /** Empty pad: store the current position. Set pad: jump to it. */
-  hotCue(index: number): void {
+  /**
+   * Pad pressed. Empty: store the position. Set, deck playing: jump (keeping
+   * the beat phase with quantize). Set, deck stopped: play from it while held.
+   */
+  hotCueDown(index: number): void {
     if (!this.loaded) {
       this.notice('Load a track first', 'warn');
       return;
@@ -395,10 +536,23 @@ export class DeckController {
       cues[index] = this.snap(this.position());
       this.store.set({ hotCues: cues });
       this.notice(`Hot cue ${index + 1} set`);
+    } else if (this.state.playing && this.state.previewing === null) {
+      this.jump(existing);
+      this.notice(`Hot cue ${index + 1}`);
     } else {
       this.seek(existing);
-      this.notice(`Hot cue ${index + 1}`);
+      if (!this.state.playing) this.play();
+      this.store.set({ previewing: index });
+      this.notice(`Hot cue ${index + 1} (release to return)`);
     }
+  }
+
+  /** Pad released: end a hot-cue preview (unless PLAY latched it). */
+  hotCueUp(index: number): void {
+    const cue = this.state.hotCues[index];
+    if (this.state.previewing !== index || cue === null) return;
+    this.pause();
+    this.seek(cue);
   }
 
   clearHotCue(index: number): void {
@@ -414,14 +568,28 @@ export class DeckController {
 
   // ---- loops ----------------------------------------------------------------
 
-  private setLoop(loop: Loop | null): void {
-    if (loop) {
-      this.send({ type: 'loop', start: loop.start * this.sampleRate, end: loop.end * this.sampleRate });
-      this.store.set({ loop, lastLoop: loop, loopIn: null });
-    } else {
+  /**
+   * Engage (or clear) a loop, fitted inside the track first: a loop starting
+   * before 0 or ending past the track would never wrap in the audio thread.
+   *
+   * @returns the loop actually set, or null if none was.
+   */
+  private setLoop(loop: Loop | null): Loop | null {
+    if (!loop) {
       this.send({ type: 'loopOff' });
       this.store.set({ loop: null, loopIn: null });
+      return null;
     }
+    const grid = this.grid;
+    const fitted = fitLoop(loop.start, loop.end, this.duration, grid ? beatLength(grid.bpm) : undefined);
+    if (!fitted) {
+      this.notice('Loop is longer than the track', 'warn');
+      return null;
+    }
+    const placed = { ...loop, start: fitted.start, end: fitted.end };
+    this.send({ type: 'loop', start: placed.start * this.sampleRate, end: placed.end * this.sampleRate });
+    this.store.set({ loop: placed, lastLoop: placed, loopIn: null });
+    return placed;
   }
 
   private requireGrid(action: string): BeatGrid | null {
@@ -450,8 +618,8 @@ export class DeckController {
     }
     const start = this.snap(this.position(), 'floor');
     this.store.set({ loopSize: beats });
-    this.setLoop({ start, end: start + beats * beatLength(grid.bpm), beats });
-    this.notice(`Loop ${formatBeats(beats)}`);
+    const placed = this.setLoop({ start, end: start + beats * beatLength(grid.bpm), beats });
+    if (placed) this.notice(`Loop ${formatBeats(beats)}${Math.abs(placed.start - start) > 1e-6 ? ' (moved to fit the track)' : ''}`);
   }
 
   loopInPoint(): void {
@@ -466,8 +634,7 @@ export class DeckController {
     if (start === null) return this.notice('Set loop in first', 'warn');
     const end = this.snap(this.position());
     if (end <= start + 0.01) return this.notice('Loop out must be after loop in', 'warn');
-    this.setLoop({ start, end, beats: null });
-    this.notice('Loop set');
+    if (this.setLoop({ start, end, beats: null })) this.notice('Loop set');
   }
 
   /** Toggle the current (or last) loop. */
@@ -476,8 +643,7 @@ export class DeckController {
       this.setLoop(null);
       this.notice('Loop off');
     } else if (this.state.lastLoop) {
-      this.setLoop(this.state.lastLoop);
-      this.notice('Reloop');
+      if (this.setLoop(this.state.lastLoop)) this.notice('Reloop');
     } else {
       this.autoLoop();
     }
@@ -494,7 +660,7 @@ export class DeckController {
     const span = (loop.end - loop.start) * factor;
     if (span < 0.02) return this.notice('Loop is as short as it goes', 'warn');
     const beats = loop.beats === null ? null : loop.beats * factor;
-    this.setLoop({ start: loop.start, end: loop.start + span, beats });
+    if (!this.setLoop({ start: loop.start, end: loop.start + span, beats })) return;
     if (beats !== null) this.store.set({ loopSize: beats });
     if (beats !== null) this.notice(`Loop ${formatBeats(beats)}`);
     else this.notice(factor > 1 ? 'Loop doubled' : 'Loop halved');
@@ -505,11 +671,22 @@ export class DeckController {
     const grid = this.requireGrid('Beat jump');
     if (!grid) return;
     const offset = direction * this.state.loopSize * beatLength(grid.bpm);
+    // Read the position before moving the loop: once the loop has moved, the
+    // estimate wraps into it and the offset would be applied twice.
+    const target = this.renderPosition() + offset;
+    if (target < 0 || target >= this.duration - 0.05) {
+      this.notice(`Cannot jump past the ${target < 0 ? 'start' : 'end'} of the track`, 'warn');
+      return;
+    }
     const loop = this.state.loop;
     if (loop) this.setLoop({ ...loop, start: loop.start + offset, end: loop.end + offset });
-    this.seek(this.renderPosition() + offset);
+    this.seek(target, undefined, true);
     this.notice(`Jump ${direction > 0 ? '+' : '-'}${formatBeats(this.state.loopSize)}`);
   }
+}
+
+function readyText(bpm: number | null): string {
+  return bpm === null ? 'Ready (no steady beat found)' : 'Ready';
 }
 
 export function formatTime(seconds: number): string {

@@ -3,14 +3,17 @@
  *
  * Pressing SYNC makes that deck the follower: its tempo is matched to the other
  * deck (the leader) and its playhead is moved into phase. While synced, the
- * follower tracks the leader's tempo fader. Pressing SYNC again, or moving the
- * follower's own tempo fader, releases it.
+ * follower tracks the leader's tempo, and moving the follower's own tempo
+ * fader moves the shared tempo (the leader follows it) instead of silently
+ * dropping sync. Pressing SYNC again releases it.
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (shared tempo from the follower's fader, range
+ *   widening while following, realign after unquantized jumps)
  */
 import type { DeckController } from './deck-controller';
-import { phaseAlignedPosition, tempoForSync } from './sync';
+import { phaseAlignedPosition, TEMPO_RANGES, tempoForSync } from './sync';
 
 export class SyncCoordinator {
   private readonly multipliers = new Map<DeckController, number>();
@@ -19,6 +22,10 @@ export class SyncCoordinator {
 
   constructor(private readonly decks: [DeckController, DeckController]) {
     for (const deck of decks) {
+      deck.syncHooks = {
+        manualTempo: (tempo) => this.manualTempo(deck, tempo),
+        realign: () => this.align(deck),
+      };
       deck.store.subscribe((state, previous) => {
         // The leader's tempo or grid changed: carry followers along.
         if (state.tempo !== previous.tempo || state.bpm !== previous.bpm) this.follow(deck);
@@ -78,18 +85,54 @@ export class SyncCoordinator {
     // Both positions at one instant; the seek carries that instant so the
     // processor compensates for however late the jump lands.
     const at = follower.now();
-    const aligned = phaseAlignedPosition(leaderGrid, leader.renderPosition(at), followerGrid, follower.renderPosition(at), this.multipliers.get(follower) ?? 1);
-    this.lastAlign = { deck: follower.id, at, leader: leader.renderPosition(at), follower: follower.renderPosition(at), aligned };
-    follower.seek(aligned, at);
+    const leaderPos = leader.renderPosition(at);
+    const followerPos = follower.renderPosition(at);
+    const aligned = phaseAlignedPosition(leaderGrid, leaderPos, followerGrid, followerPos, this.multipliers.get(follower) ?? 1);
+    this.lastAlign = { deck: follower.id, at, leader: leaderPos, follower: followerPos, aligned };
+    // Within half a beat, so keep an active loop: its span is whole beats and
+    // the audio thread folds the target back in phase.
+    follower.seek(aligned, at, true);
   }
 
-  /** Re-apply tempo to any deck following `leader`. */
+  /** Tempo the follower needs for the leader's current tempo, or null if either has no grid. */
+  private targetTempo(follower: DeckController): number | null {
+    const leaderBpm = this.other(follower).effectiveBpm;
+    const followerGrid = follower.grid;
+    if (leaderBpm === null || !followerGrid) return null;
+    return (leaderBpm * (this.multipliers.get(follower) ?? 1)) / followerGrid.bpm - 1;
+  }
+
+  /** Re-apply tempo to any deck following `leader`, widening its range when needed. */
   private follow(leader: DeckController): void {
     const follower = this.other(leader);
+    if (!follower.state.synced) return;
+    const tempo = this.targetTempo(follower);
+    if (tempo === null) return;
+    const range = TEMPO_RANGES.find((r) => Math.abs(tempo) <= r + 1e-9);
+    if (range === undefined) {
+      follower.setSynced(false);
+      follower.notice(`Sync off: deck ${leader.id}'s tempo is beyond this deck's range`, 'warn');
+      return;
+    }
+    if (range > follower.state.tempoRange) follower.setTempoRange(range);
+    follower.applyTempo(tempo);
+  }
+
+  /**
+   * A synced deck's own fader moved: move the shared tempo. The other deck is
+   * set so its heard BPM matches, and this deck then follows it exactly.
+   */
+  private manualTempo(follower: DeckController, tempo: number): boolean {
+    const leader = this.other(follower);
     const followerGrid = follower.grid;
-    const leaderBpm = leader.effectiveBpm;
-    if (!follower.state.synced || !followerGrid || leaderBpm === null) return;
+    const leaderGrid = leader.grid;
+    if (!followerGrid || !leaderGrid) return false;
     const multiplier = this.multipliers.get(follower) ?? 1;
-    follower.applyTempo((leaderBpm * multiplier) / followerGrid.bpm - 1);
+    const sharedBpm = (followerGrid.bpm * (1 + tempo)) / multiplier;
+    if (!leader.applyTempo(sharedBpm / leaderGrid.bpm - 1)) {
+      follower.notice(`Deck ${leader.id}'s tempo range is at its limit`, 'warn');
+    }
+    // follow() runs from the leader's store update and sets this deck exactly.
+    return true;
   }
 }

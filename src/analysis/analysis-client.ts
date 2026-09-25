@@ -1,8 +1,12 @@
 /**
  * Main-thread client for the analysis worker.
  *
+ * One client (and so one worker) per deck, so cancelling a superseded load
+ * never disturbs the other deck's analysis.
+ *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-25-2026 (cancel)
  */
 import type { Peaks } from './peaks';
 
@@ -61,6 +65,21 @@ export class AnalysisClient {
     };
     this.worker = worker;
     return worker;
+  }
+
+  /**
+   * Abandon every job in flight. The worker is terminated (analysis is
+   * synchronous inside it, so there is no other way to stop it) and restarted
+   * lazily on the next job; pending promises reject with an AbortError.
+   * Without this, a superseded 10-minute analysis blocked the next load.
+   */
+  cancel(): void {
+    if (!this.worker) return;
+    this.worker.terminate();
+    this.worker = null;
+    const error = new DOMException('Analysis superseded', 'AbortError');
+    for (const job of this.pending.values()) job.reject(error);
+    this.pending.clear();
   }
 
   /**
