@@ -36,6 +36,7 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
     press('sync', () => sync.toggle(deck));
     press('quantize', () => deck.toggleQuantize());
     press('lock', () => deck.toggleLock());
+    press('keylock', () => deck.toggleKeyLock());
     press('range', () => deck.cycleTempoRange());
     press('tempo.reset', () => deck.resetTempo());
     press('loop.toggle', () => deck.toggleLoop());

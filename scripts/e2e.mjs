@@ -291,6 +291,19 @@ try {
   const drift = await evaluate(phaseExpr);
   check('still in phase 2 s after a tempo change', Math.abs(drift) < 0.02, `${(drift * 100).toFixed(2)}% of a beat`);
 
+  // Key lock on both synced decks: grains are placed within +/-2.7 ms, so the
+  // mix must stay in phase and the processor keeps playing.
+  await click('.deck-a .tempo-section', 'KEYLOCK');
+  await click('.deck-b .tempo-section', 'KEYLOCK');
+  await sleep(1500);
+  const lockedPhase = await evaluate(phaseExpr);
+  const lockedPeak = await evaluate('window.dj.engine.meter(window.dj.engine.masterAnalyser).peak');
+  const lockUi = await evaluate(`[...document.querySelectorAll('.btn-keylock')].every((b) => b.classList.contains('on'))`);
+  check('key lock on both synced decks keeps them in phase', lockUi && Math.abs(lockedPhase) < 0.02 && lockedPeak > 0.02, `${(lockedPhase * 100).toFixed(2)}% of a beat, peak ${lockedPeak.toFixed(3)}`);
+  await click('.deck-a .tempo-section', 'KEYLOCK');
+  await click('.deck-b .tempo-section', 'KEYLOCK');
+  await sleep(200);
+
   check('phase meter reads "In phase"', (await evaluate(`document.querySelector('.phase-label').textContent`)) === 'In phase');
 
   // A quantized hot-cue jump on the synced deck keeps it in phase.

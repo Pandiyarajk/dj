@@ -45,6 +45,8 @@ export class DeckView {
   private readonly quantizeButton: HTMLButtonElement;
   private readonly lockButton: HTMLButtonElement;
   private readonly keyChip: HTMLElement;
+  private readonly keyLockButton: HTMLButtonElement;
+  private readonly keyShift: HTMLElement;
   private readonly loopButton: HTMLButtonElement;
   private readonly loopInButton: HTMLButtonElement;
   private readonly pads: HTMLButtonElement[] = [];
@@ -76,10 +78,13 @@ export class DeckView {
     this.syncButton = btn('SYNC', 'sync', 'Match tempo and phase to the other deck; press again to release', 'btn-sync');
     this.quantizeButton = btn('Q', 'quantize', 'Quantize: snap cues and loops to the beat grid, keep the beat on jumps', 'btn-small');
     this.rangeButton = btn('8%', 'range', 'Tempo fader range', 'btn-small');
+    this.keyShift = h('span', { class: 'key-shift' });
     this.keyChip = h('div', { class: 'key-chip', title: 'Musical key (Camelot). Keys one step apart on the wheel, or the same number, mix harmonically.' }, [
       h('span', { class: 'key-label', text: 'KEY' }),
       h('span', { class: 'key-value', text: '--' }),
+      this.keyShift,
     ]);
+    this.keyLockButton = btn('KEYLOCK', 'keylock', 'Key lock: tempo changes keep the pitch', 'btn-small btn-keylock');
     this.lockButton = btn('LOCK', 'lock', 'Lock on air: blocks loading, CUE and pause on this deck while it plays', 'btn-tiny btn-lock');
 
     for (let i = 0; i < HOT_CUE_COUNT; i++) this.pads.push(this.pad(actions, `${d}.hotcue.${i + 1}`, i));
@@ -139,6 +144,7 @@ export class DeckView {
         h('div', { class: 'tempo-section' }, [
           this.syncButton,
           h('div', { class: 'tempo-small-row' }, [this.quantizeButton, this.rangeButton]),
+          this.keyLockButton,
           this.tempoFader,
           h('div', { class: 'tempo-small-row' }, [
             btn('-', 'bend.down', 'Nudge slower (hold)', 'btn-small', true),
@@ -278,10 +284,14 @@ export class DeckView {
     setClass(this.syncButton, 'on', state.synced);
     setClass(this.quantizeButton, 'on', state.quantize);
     setClass(this.lockButton, 'on', state.locked);
-    const keyValue = this.keyChip.lastElementChild as HTMLElement;
+    const keyValue = this.keyChip.querySelector('.key-value') as HTMLElement;
     let keyText = state.key ?? '--';
     if (state.key === null && state.analysis !== null) keyText = '...';
     setText(keyValue, keyText);
+    setClass(this.keyLockButton, 'on', state.keyLock);
+    // Without key lock, tempo moves the pitch: show by how much.
+    const shift = this.deck.pitchShift;
+    setText(this.keyShift, Math.abs(shift) >= 0.05 ? `${shift > 0 ? '+' : ''}${shift.toFixed(1)} st` : '');
     setClass(this.el, 'locked', state.locked);
     setText(this.rangeButton, `${Math.round(state.tempoRange * 100)}%`);
     setClass(this.loopButton, 'on', state.loop !== null);

@@ -107,6 +107,8 @@ export interface DeckState {
    * stop or replace the track the room is hearing.
    */
   locked: boolean;
+  /** Key lock (master tempo): tempo changes keep the pitch. */
+  keyLock: boolean;
 }
 
 function initialState(): DeckState {
@@ -135,6 +137,7 @@ function initialState(): DeckState {
     quantize: true,
     synced: false,
     locked: false,
+    keyLock: false,
   };
 }
 
@@ -257,6 +260,7 @@ export class DeckController {
     this.send({ type: 'seek', frame: 0, seq: this.seq });
     this.report = { frame: 0, time: this.engine.ctx.currentTime, playing: false };
     this.send({ type: 'rate', rate: this.rate });
+    this.send({ type: 'keyLock', on: this.state.keyLock });
 
     const bpm = saved?.bpm ?? null;
     // Cached peaks mean analysis already ran, even if it found no steady beat.
@@ -425,6 +429,18 @@ export class DeckController {
     this.seq++;
     this.send({ type: 'pause', seq: this.seq });
     this.store.set({ playing: false, previewing: null });
+  }
+
+  /** Toggle key lock: tempo changes keep (on) or shift (off) the pitch. */
+  toggleKeyLock(): void {
+    this.store.set({ keyLock: !this.state.keyLock });
+    this.send({ type: 'keyLock', on: this.state.keyLock });
+    this.notice(this.state.keyLock ? 'Key lock on: tempo keeps the pitch' : 'Key lock off: tempo shifts the pitch');
+  }
+
+  /** Semitones the heard pitch is shifted by tempo (0 with key lock on). */
+  get pitchShift(): number {
+    return this.state.keyLock ? 0 : 12 * Math.log2(this.rate);
   }
 
   /** Toggle the on-air lock. */
