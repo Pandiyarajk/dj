@@ -5,6 +5,7 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  */
+import { compatibleKeys } from '../analysis/key';
 import { tempoForSync } from '../audio/sync';
 
 export interface Searchable {
@@ -37,4 +38,18 @@ export function matchesQuery(entry: Searchable, query: string): boolean {
 export function bpmDelta(bpm: number | null, reference: number): number | null {
   if (bpm === null) return null;
   return tempoForSync(reference, bpm).tempo * 100;
+}
+
+/**
+ * Suggestion score for the next track (lower is better): the tempo change
+ * needed, plus a penalty for a clashing key and a large one for a track
+ * already played. Null when the track has no BPM.
+ */
+export function suggestionScore(entry: { bpm: number | null; key: string | null }, reference: { bpm: number; key: string | null }, played: boolean): number | null {
+  const delta = bpmDelta(entry.bpm, reference.bpm);
+  if (delta === null) return null;
+  let score = Math.abs(delta);
+  if (reference.key && entry.key && !compatibleKeys(reference.key).includes(entry.key)) score += 4;
+  if (played) score += 100;
+  return score;
 }

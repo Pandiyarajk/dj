@@ -30,6 +30,7 @@ import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
 import { requestPersistence } from './library/db';
 import { BackgroundAnalyser } from './library/background-analyser';
+import { Crates } from './library/crates';
 import { PLAYED_AFTER, PlayHistory } from './library/history';
 import { TrackLoader } from './library/track-loader';
 import { describeDeck, SessionManager } from './state/session';
@@ -288,6 +289,8 @@ async function boot(): Promise<void> {
     }
   };
 
+  const crates = new Crates();
+  void crates.load();
   const history = new PlayHistory();
   void history.load();
   const historyDialog = new HistoryDialog(history);
@@ -318,6 +321,7 @@ async function boot(): Promise<void> {
         },
         playedIds: () => history.playedIds(),
         prelisten: (entry) => void startPrelisten(entry),
+        crates,
         load: (entry, id) => load(entry, deckById(id)),
         loadAuto: (entry) => {
           const target = decks.find((d) => !d.loaded) ?? decks.find((d) => !d.state.playing);
@@ -343,6 +347,7 @@ async function boot(): Promise<void> {
   actions.register('library.loadA', (v) => v > 0 && libraryView?.loadSelected('A'));
   actions.register('library.loadB', (v) => v > 0 && libraryView?.loadSelected('B'));
   actions.register('library.match', (v) => v > 0 && libraryView?.toggleMatch());
+  actions.register('library.crate', (v) => v > 0 && libraryView?.addSelectedToCrate());
 
   // Played history: a track counts once audible (playing, fader up, not
   // crossfaded out) for PLAYED_AFTER seconds.
@@ -457,7 +462,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi, crates } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

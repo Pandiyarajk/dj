@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { historyToCsv, type HistoryItem } from '../src/library/history';
-import { bpmDelta, matchesQuery } from '../src/library/match';
+import { bpmDelta, matchesQuery, suggestionScore } from '../src/library/match';
 
 const item = (at: number, title: string, bpm: number | null): HistoryItem => ({ at, deck: 'A', title, artist: 'Artist, The', bpm, key: '8A', entryId: null });
 
@@ -47,5 +47,19 @@ describe('matchesQuery', () => {
     expect(matchesQuery(entry, '130')).toBe(false);
     expect(matchesQuery(entry, '8a')).toBe(true);
     expect(matchesQuery(entry, '9A')).toBe(false);
+  });
+});
+
+describe('suggestionScore', () => {
+  const ref = { bpm: 124, key: '8A' };
+  it('ranks a close tempo in a compatible key first, a clash next, played last', () => {
+    const near = suggestionScore({ bpm: 125, key: '9A' }, ref, false)!;
+    const clash = suggestionScore({ bpm: 125, key: '3B' }, ref, false)!;
+    const farther = suggestionScore({ bpm: 128, key: '8A' }, ref, false)!;
+    const played = suggestionScore({ bpm: 124, key: '8A' }, ref, true)!;
+    expect(near).toBeLessThan(farther);
+    expect(farther).toBeLessThan(clash);
+    expect(clash).toBeLessThan(played);
+    expect(suggestionScore({ bpm: null, key: '8A' }, ref, false)).toBeNull();
   });
 });

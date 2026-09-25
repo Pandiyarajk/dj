@@ -599,6 +599,46 @@ try {
   await key('KeyG', 'g');
   check('Match keeps tracks within 6% of the deck on air, with the tempo change', JSON.stringify([...matched.titles].sort()) === JSON.stringify(['Demo House 124', 'Demo House 128']) && matched.delta === '-3.1%', `${JSON.stringify(matched.titles)} "${matched.status}" delta ${matched.delta}`);
 
+  // Suggest next: with Match on, the closest tempo (and compatible key) ranks first.
+  await key('KeyG', 'g');
+  await sleep(150);
+  const suggested = await evaluate(visibleTitles);
+  await key('KeyG', 'g');
+  check('Match ranks the best next track first', suggested[0] === 'Demo House 124' && suggested[1] === 'Demo House 128', JSON.stringify(suggested));
+
+  // Crates: create, add (and refuse a duplicate), view, remove.
+  const libStatus = `document.querySelector('.library-toolbar .library-status:last-child').textContent`;
+  await evaluate(`(() => { const s = document.querySelector('.crate-select'); s.value = '__new'; s.dispatchEvent(new Event('change')); })()`);
+  await evaluate(`(() => { const i = document.querySelector('.crate-name'); i.value = 'Friday'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+  await sleep(150);
+  await evaluate(`document.querySelector('.crate-select').value = ''; document.querySelector('.crate-select').dispatchEvent(new Event('change'))`);
+  await sleep(100);
+  await evaluate(`[...document.querySelectorAll('.library-table tr')].find((tr) => tr.querySelector('.col-title')?.textContent === 'Mid 132').click()`);
+  await evaluate(`(() => { const s = document.querySelector('.crate-select'); s.value = 'Friday'; s.dispatchEvent(new Event('change')); })()`);
+  await sleep(100);
+  const emptyCrate = await evaluate(`document.querySelector('.library-table .empty-row')?.textContent ?? ''`);
+  // Back to all tracks (Friday stays the add target), select a row, press V twice.
+  await evaluate(`(() => { const s = document.querySelector('.crate-select'); s.value = ''; s.dispatchEvent(new Event('change')); })()`);
+  await sleep(100);
+  const addLabel = await evaluate(`[...document.querySelectorAll('.crate-toolbar button')].map((b) => b.textContent).join('|')`);
+  await evaluate(`[...document.querySelectorAll('.library-table tr')].find((tr) => tr.querySelector('.col-title')?.textContent === 'Mid 132').click()`);
+  await evaluate('document.activeElement && document.activeElement.blur()');
+  await key('KeyV', 'v');
+  await sleep(150);
+  const added = await evaluate(libStatus);
+  await key('KeyV', 'v');
+  await sleep(150);
+  const dup = await evaluate(libStatus);
+  await evaluate(`(() => { const s = document.querySelector('.crate-select'); s.value = 'Friday'; s.dispatchEvent(new Event('change')); })()`);
+  await sleep(150);
+  const inCrate = await evaluate(visibleTitles);
+  await evaluate(`[...document.querySelectorAll('.library-table tr')].find((tr) => tr.querySelector('.col-title')?.textContent === 'Mid 132').click()`);
+  await click('.crate-toolbar', 'Remove');
+  await sleep(150);
+  const afterRemove = await evaluate(libStatus);
+  await evaluate(`(() => { const s = document.querySelector('.crate-select'); s.value = ''; s.dispatchEvent(new Event('change')); })()`);
+  check('crates: create, add with V from all tracks, refuse a duplicate, view, remove', /Friday is empty/.test(emptyCrate) && /\+ Friday/.test(addLabel) && /Added "Mid 132" to Friday/.test(added) && JSON.stringify(inCrate) === '["Mid 132"]' && /already in Friday/.test(dup) && /Removed "Mid 132" from Friday/.test(afterRemove), `"${added}", in crate ${JSON.stringify(inCrate)}, dup "${dup}", "${afterRemove}"`);
+
   await evaluate(`${deckExpr(1)}.pause()`);
   await key('Slash', '/');
   await evaluate(`(() => { const s = document.querySelector('.library-search'); s.value = 'Hiphop'; s.dispatchEvent(new Event('input')); })()`);

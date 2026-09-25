@@ -1462,6 +1462,32 @@ input[type='range']::-moz-range-thumb {
   flex-wrap: wrap;
 }
 
+.crate-toolbar {
+  padding-top: 0;
+}
+
+.crate-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+}
+
+.crate-select,
+.crate-name {
+  background: var(--lcd);
+  color: var(--text);
+  border: 1px solid var(--line-hi);
+  border-radius: 5px;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.crate-select {
+  min-width: 11rem;
+}
+
 .library-search {
   flex: 1;
   min-width: 12rem;

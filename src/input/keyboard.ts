@@ -68,7 +68,8 @@ export const KEYMAP: KeyBinding[] = [
   { code: 'Slash', key: '/', action: 'library.search', description: 'Search the library', group: 'Library' },
   { code: 'ArrowUp', key: 'Up', action: 'library.up', description: 'Select the previous track', group: 'Library' },
   { code: 'ArrowDown', key: 'Down', action: 'library.down', description: 'Select the next track', group: 'Library' },
-  { code: 'KeyG', key: 'G', action: 'library.match', description: 'Match filter on / off', group: 'Library' },
+  { code: 'KeyG', key: 'G', action: 'library.match', description: 'Suggest next (Match) on / off', group: 'Library' },
+  { code: 'KeyV', key: 'V', action: 'library.crate', description: 'Add the selected track to the crate', group: 'Library' },
 ];
 
 /** Keys a focused slider handles itself. */

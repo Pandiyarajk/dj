@@ -11,11 +11,12 @@ import { formatTime } from '../audio/deck-controller';
 import { compatibleKeys } from '../analysis/key';
 import { supportsFolderPicker } from '../library/fs';
 import type { Library, LibraryEntry, LibraryState } from '../library/library';
-import { bpmDelta, matchesQuery } from '../library/match';
+import type { Crates } from '../library/crates';
+import { bpmDelta, matchesQuery, suggestionScore } from '../library/match';
 import { ENTRY_DRAG_TYPE } from './deck-view';
 import { h, setClass, setText } from './dom';
 
-type SortKey = 'title' | 'artist' | 'bpm' | 'key' | 'duration' | 'delta';
+type SortKey = 'title' | 'artist' | 'bpm' | 'key' | 'duration' | 'delta' | 'order' | 'suggest';
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 /** Rows rendered at most; the rest are reachable by searching. */
 const MAX_ROWS = 500;
@@ -41,6 +42,8 @@ export interface LibraryViewHandlers {
   playedIds?: () => Set<string>;
   /** Hear a row in the headphones only. */
   prelisten?: (entry: LibraryEntry) => void;
+  /** Crates for preparing sets. */
+  crates?: Crates;
 }
 
 interface Row {
@@ -56,6 +59,18 @@ export class LibraryView {
   private readonly search: HTMLInputElement;
   private readonly reopen: HTMLButtonElement;
   private readonly matchButton: HTMLButtonElement;
+  private readonly crateSelect: HTMLSelectElement;
+  private readonly crateName: HTMLInputElement;
+  private readonly crateAdd: HTMLButtonElement;
+  private readonly crateRemove: HTMLButtonElement;
+  /** Crate being viewed, or null for the whole library. */
+  private crateView: string | null = null;
+  /**
+   * Crate that + Crate / V adds to: the last one picked or created. Kept
+   * apart from the view, because a crate view only shows tracks already in it.
+   */
+  private crateTarget: string | null = null;
+  private crateNote = '';
   private readonly headers = new Map<SortKey, HTMLTableCellElement>();
   private sort: { key: SortKey; ascending: boolean } = { key: 'title', ascending: true };
   private renderQueued = false;
@@ -103,6 +118,42 @@ export class LibraryView {
       attrs: { type: 'search', placeholder: 'Search title, artist, album, BPM (124) or key (8A)   /', 'aria-label': 'Search library' },
     });
     this.search.addEventListener('input', () => this.queueRender());
+
+    // Crates: view one, create one, add or remove the selected track.
+    this.crateSelect = h('select', { class: 'crate-select', title: 'Crate', attrs: { 'aria-label': 'Crate' } });
+    this.crateName = h('input', { class: 'crate-name', attrs: { type: 'text', placeholder: 'New crate name, Enter', 'aria-label': 'New crate name' } });
+    this.crateName.hidden = true;
+    this.crateAdd = tool('+ Crate', 'Add the selected track to the crate (V)', () => this.addSelectedToCrate());
+    this.crateRemove = tool('Remove', 'Remove the selected track from this crate', () => this.removeSelectedFromCrate());
+    this.crateSelect.addEventListener('change', () => {
+      if (this.crateSelect.value === '__new') {
+        this.crateName.hidden = false;
+        this.crateName.focus();
+        return;
+      }
+      this.crateView = this.crateSelect.value || null;
+      if (this.crateView) this.crateTarget = this.crateView;
+      this.sort = { key: this.crateView ? 'order' : 'title', ascending: true };
+      this.queueRender();
+    });
+    this.crateName.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        this.crateName.hidden = true;
+        this.renderCrates();
+      }
+      if (event.key !== 'Enter') return;
+      const result = handlers.crates?.create(this.crateName.value);
+      this.crateNote = result?.message ?? '';
+      if (result?.ok) {
+        this.crateView = this.crateName.value.trim();
+        this.crateTarget = this.crateView;
+        this.crateName.value = '';
+        this.crateName.hidden = true;
+        this.sort = { key: 'order', ascending: true };
+      }
+      this.queueRender();
+    });
+    handlers.crates?.store.subscribe(() => this.queueRender());
     // Up/Down move the selection and Enter loads it, even from the search box.
     this.search.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -156,6 +207,7 @@ export class LibraryView {
 
     this.el = h('section', { class: 'library', attrs: { 'aria-label': 'Library' } }, [
       h('div', { class: 'library-toolbar' }, [folder, this.reopen, files, ...(handlers.tools ?? []), this.matchButton, this.search, this.status]),
+      handlers.crates ? h('div', { class: 'library-toolbar crate-toolbar' }, [h('span', { class: 'crate-label', text: 'CRATE' }), this.crateSelect, this.crateName, this.crateAdd, this.crateRemove]) : null,
       h('div', { class: 'library-table-wrap' }, [table]),
     ]);
 
@@ -176,7 +228,45 @@ export class LibraryView {
   toggleMatch(): void {
     this.matching = !this.matching;
     setClass(this.matchButton, 'on', this.matching);
+    // Matching ranks by suggestion: close tempo, compatible key, not played.
+    if (this.matching) this.sort = { key: 'suggest', ascending: true };
+    else if (this.sort.key === 'suggest') this.sort = { key: this.crateView ? 'order' : 'title', ascending: true };
     this.queueRender();
+  }
+
+  /** Add the selected row to the crate in view (or the one picked). */
+  addSelectedToCrate(): void {
+    const entry = this.visible.find((e) => e.id === this.selectedId);
+    const crates = this.handlers.crates;
+    if (!crates) return;
+    if (!entry) this.crateNote = 'Select a track first (click a row or Up / Down)';
+    else if (!this.crateTarget) this.crateNote = 'Pick or create a crate first';
+    else this.crateNote = crates.add(this.crateTarget, entry.id, entry.title).message;
+    this.queueRender();
+  }
+
+  private removeSelectedFromCrate(): void {
+    const entry = this.visible.find((e) => e.id === this.selectedId);
+    const crates = this.handlers.crates;
+    if (!crates || !this.crateView) return;
+    this.crateNote = entry ? crates.remove(this.crateView, entry.id, entry.title).message : 'Select a track first';
+    this.queueRender();
+  }
+
+  private renderCrates(): void {
+    const crates = this.handlers.crates?.store.get().crates ?? [];
+    const options = [
+      h('option', { text: 'All tracks', attrs: { value: '' } }),
+      ...crates.map((c) => h('option', { text: `${c.name} (${c.ids.length})`, attrs: { value: c.name } })),
+      h('option', { text: '+ New crate...', attrs: { value: '__new' } }),
+    ];
+    this.crateSelect.replaceChildren(...options);
+    if (this.crateView && !crates.some((c) => c.name === this.crateView)) this.crateView = null;
+    if (this.crateTarget && !crates.some((c) => c.name === this.crateTarget)) this.crateTarget = null;
+    this.crateSelect.value = this.crateView ?? '';
+    this.crateRemove.hidden = this.crateView === null;
+    setText(this.crateAdd, this.crateTarget ? `+ ${this.crateTarget}` : '+ Crate');
+    this.crateAdd.title = this.crateTarget ? `Add the selected track to ${this.crateTarget} (V)` : 'Pick or create a crate first';
   }
 
   /** Move the selection by `step` rows (wrapping), scrolling it into view. */
@@ -221,7 +311,10 @@ export class LibraryView {
 
   private visibleEntries(state: LibraryState, reference: MatchReference | null): LibraryEntry[] {
     const query = this.search.value;
-    let matches = state.entries.filter((e) => matchesQuery(e, query));
+    const crate = this.crateView ? this.handlers.crates?.get(this.crateView) : undefined;
+    const order = new Map((crate?.ids ?? []).map((id, i) => [id, i]));
+    let matches = state.entries.filter((e) => matchesQuery(e, query) && (!crate || order.has(e.id)));
+    const played = this.handlers.playedIds?.() ?? new Set<string>();
     const refBpm = reference?.bpm ?? null;
     if (this.matching && refBpm !== null) {
       matches = matches.filter((e) => {
@@ -232,6 +325,8 @@ export class LibraryView {
     const { key, ascending } = this.sort;
     const direction = ascending ? 1 : -1;
     const value = (e: LibraryEntry): string | number | null => {
+      if (key === 'order') return order.get(e.id) ?? null;
+      if (key === 'suggest') return refBpm === null ? null : suggestionScore(e, { bpm: refBpm, key: reference?.key ?? null }, played.has(e.id));
       if (key === 'delta') {
         const delta = refBpm === null ? null : bpmDelta(e.bpm, refBpm);
         return delta === null ? null : Math.abs(delta);
@@ -276,6 +371,7 @@ export class LibraryView {
     if (entries.length === 0) {
       let message = 'No tracks match the search';
       if (state.entries.length === 0) message = 'No tracks yet: open a folder, add files or drop a file on a deck';
+      else if (this.crateView && (this.handlers.crates?.get(this.crateView)?.ids.length ?? 0) === 0) message = `Crate ${this.crateView} is empty: select a track and press + Crate (or V)`;
       else if (this.matching && reference?.bpm) message = `No tracks within ${MATCH_RANGE}% of ${reference.bpm.toFixed(1)} BPM`;
       this.body.replaceChildren(h('tr', { class: 'empty-row' }, [h('td', { text: message, attrs: { colspan: '7' } })]));
     } else {
@@ -284,10 +380,16 @@ export class LibraryView {
       if (!unchanged) this.body.replaceChildren(...rows);
     }
 
+    this.renderCrates();
     let status = state.status;
-    if (this.matching) {
+    if (this.crateNote) {
+      status = this.crateNote;
+      this.crateNote = '';
+    } else if (this.crateView && !this.matching) {
+      status = `Crate ${this.crateView}: ${entries.length} track${entries.length === 1 ? '' : 's'}`;
+    } else if (this.matching) {
       status = reference?.bpm
-        ? `Match: ${entries.length} within ${MATCH_RANGE}% of deck ${reference.deck} (${reference.bpm.toFixed(1)} BPM${reference.key ? `, ${reference.key}` : ''})`
+        ? `Suggested next: ${entries.length} within ${MATCH_RANGE}% of deck ${reference.deck} (${reference.bpm.toFixed(1)} BPM${reference.key ? `, ${reference.key}` : ''}), best first`
         : 'Match: load and analyse a track on a deck first';
     } else if (entries.length > MAX_ROWS) status += ` (showing ${MAX_ROWS} of ${entries.length}; search to narrow)`;
     else if (this.search.value.trim()) status += ` (${entries.length} match${entries.length === 1 ? '' : 'es'})`;
