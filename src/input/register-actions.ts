@@ -90,4 +90,5 @@ export function registerActions(actions: Actions, decks: [DeckController, DeckCo
   actions.register('mixer.master', (v) => mixer.set({ master: v }));
   actions.register('mixer.autoGain', (v) => v > 0 && mixer.set({ autoGain: !mixer.get().autoGain }));
   actions.register('mixer.cueVolume', (v) => mixer.set({ cueVolume: v }));
+  actions.register('mixer.cueMix', (v) => mixer.set({ cueMix: v }));
 }

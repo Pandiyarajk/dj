@@ -562,6 +562,9 @@ try {
   await waitFor(`[...document.querySelectorAll('.library-table td.col-title')].filter((td) => /^(Slow 100|Mid 132|Hiphop 90)$/.test(td.textContent)).length === 3`, 5000, 'three new rows');
   await click('.library-toolbar', 'Analyse library');
   await waitFor(`/analysed/.test(document.querySelector('.analyse-status').textContent) && !window.dj.background.store.get().running`, 60000, 'background analysis to finish');
+  // The table re-renders on the next animation frame after the last result:
+  // wait for the rows rather than racing that frame.
+  await waitFor(`[...document.querySelectorAll('.library-table tr')].filter((tr) => /^(Slow 100|Mid 132|Hiphop 90)$/.test(tr.querySelector('.col-title')?.textContent ?? '')).every((tr) => tr.children[2].textContent !== '')`, 3000, 'rows to show BPMs').catch(() => undefined);
   const bgRows = await evaluate(`Object.fromEntries([...document.querySelectorAll('.library-table tr')].filter((tr) => /^(Slow 100|Mid 132|Hiphop 90)$/.test(tr.querySelector('.col-title')?.textContent ?? '')).map((tr) => [tr.querySelector('.col-title').textContent, tr.children[2].textContent]))`);
   const bgStatus = await evaluate(`document.querySelector('.analyse-status').textContent`);
   check('Analyse library fills BPMs for tracks never loaded', bgRows['Slow 100'] === '100.0' && bgRows['Mid 132'] === '132.0' && bgRows['Hiphop 90'] === '90.0', `${JSON.stringify(bgRows)}; "${bgStatus}"`);
@@ -602,6 +605,36 @@ try {
   const exported = await evaluate(`document.querySelector('.history-note').textContent`);
   await evaluate(`document.querySelector('dialog.history').close()`);
   check('history counts plays, dims played rows and exports', /History \(\d+\)/.test(hist.button) && hist.played === true && /^Exported \d+ track/.test(exported), `${hist.button}, "${exported}"`);
+
+  // ---- prelisten: headphones only, refused when no headphone output ----
+  const listenButton = async (title) => {
+    const rect = await evaluate(`(() => {
+      const row = [...document.querySelectorAll('.library-table tr')].find((tr) => tr.querySelector('.col-title')?.textContent === ${JSON.stringify(title)});
+      const b = row.querySelector('.btn-listen');
+      b.scrollIntoView({ block: 'center' });
+      const r = b.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, ...rect, button: 'left', clickCount: 1 });
+  };
+  await evaluate(`window.dj.decks.forEach((d) => d.pause()); window.dj.mixer.set({ cueMode: 'off' })`);
+  await listenButton('Demo House 128');
+  await sleep(400);
+  const refused = await evaluate(`document.querySelector('.listen-title').textContent`);
+  await evaluate(`window.dj.mixer.set({ cueMode: 'split' })`);
+  await sleep(200);
+  await listenButton('Demo House 128');
+  await waitFor(`window.dj.prelisten.store.get().position > 0`, 8000, 'prelisten to start');
+  const p1 = await evaluate('window.dj.prelisten.store.get().position');
+  await sleep(1000);
+  const listen = await evaluate(`({ p2: window.dj.prelisten.store.get().position, title: window.dj.prelisten.store.get().title, bar: document.querySelector('.listen-bar').classList.contains('active') })`);
+  const masterDuringListen = await evaluate(masterPeak);
+  check('prelisten refuses without a headphone output, then plays on the cue bus only', /headphone cue mode/.test(refused) && listen.title === 'Demo House 128' && listen.bar && listen.p2 > p1 + 0.5 && masterDuringListen < 0.001, `refused "${refused.slice(0, 40)}", pos ${p1.toFixed(1)} -> ${listen.p2.toFixed(1)}, master ${masterDuringListen.toFixed(4)}`);
+  await click('.listen-bar', 'Stop');
+  await evaluate(`window.dj.mixer.set({ cueMix: 1 })`);
+  await sleep(200);
+  await evaluate(`window.dj.mixer.set({ cueMix: 0, cueMode: 'off' })`);
+  check('prelisten stops and says so', (await evaluate(`document.querySelector('.listen-title').textContent`)) === 'Prelisten stopped');
 
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');

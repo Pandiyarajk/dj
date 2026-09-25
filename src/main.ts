@@ -14,8 +14,11 @@
  * Modified: Sep-25-2026 (phase meter, waveform zoom, drop guard, dismissable
  *   error banner, shortcuts blocked behind the help dialog)
  */
-import { DeckController } from './audio/deck-controller';
+import { DeckController, formatTime } from './audio/deck-controller';
+import { Prelisten } from './audio/prelisten';
 import { formatDuration } from './audio/recorder';
+import { toPcm16, wavHeader } from './audio/wav';
+import { renderDemo } from './demo/demo-tracks';
 import { AudioEngine } from './audio/engine';
 import { defaultMixer, type MixerState } from './audio/mixer';
 import { SyncCoordinator } from './audio/sync-coordinator';
@@ -138,6 +141,30 @@ async function boot(): Promise<void> {
   });
   setText(midiStatus, MidiInput.supported() ? '' : 'No Web MIDI in this browser');
   midiButton.disabled = !MidiInput.supported();
+  // ---- output device (Chrome/Edge: AudioContext.setSinkId) ----
+  const outputSelect = h('select', { class: 'output-select', title: 'Output device', attrs: { 'aria-label': 'Output device' } });
+  const fillOutputs = async (): Promise<void> => {
+    const devices = (await navigator.mediaDevices?.enumerateDevices?.().catch(() => [])) ?? [];
+    const outputs = devices.filter((d) => d.kind === 'audiooutput' && d.deviceId !== 'default');
+    outputSelect.replaceChildren(
+      h('option', { text: 'Output: system default', attrs: { value: '' } }),
+      // Browsers hide device names until a permission is granted; number them instead.
+      ...outputs.map((d, i) => h('option', { text: `Output: ${d.label || `device ${i + 1}`}`, attrs: { value: d.deviceId } })),
+    );
+  };
+  outputSelect.addEventListener('change', () => {
+    const label = outputSelect.selectedOptions[0]?.textContent ?? '';
+    engine
+      .setOutputDevice(outputSelect.value)
+      .then(() => setText(midiStatus, `${label.replace('Output: ', 'Audio now on ')}`))
+      .catch((error) => setText(midiStatus, `Could not switch output: ${errorText(error)}`));
+  });
+  outputSelect.hidden = !engine.canChooseOutput;
+  if (engine.canChooseOutput) {
+    void fillOutputs();
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => void fillOutputs());
+  }
+
   const recorder = engine.createRecorder();
   const recButton = h('button', { class: 'btn btn-small btn-rec', text: 'REC', title: 'Record the master output as a WAV file', attrs: { type: 'button' } });
   recButton.addEventListener('click', () => recorder.toggle());
@@ -153,7 +180,7 @@ async function boot(): Promise<void> {
   const topbar = h('header', { class: 'topbar' }, [
     h('div', { class: 'brand' }, [h('span', { class: 'brand-mark' }), h('span', { text: 'dj' })]),
     audioPill,
-    h('div', { class: 'topbar-right' }, [recStatus, recButton, midiStatus, midiButton, helpButton]),
+    h('div', { class: 'topbar-right' }, [recStatus, recButton, outputSelect, midiStatus, midiButton, helpButton]),
   ]);
 
   // Waveform zoom, shared by both decks so their beats line up on screen.
@@ -209,6 +236,40 @@ async function boot(): Promise<void> {
     .filter((v): v is DeckView => v !== null);
   const mixerView = start('Mixer', () => new MixerView(engine, mixer, actions, decks));
   const background = new BackgroundAnalyser(engine.ctx, library, decks);
+  // ---- prelisten (headphones only) ----
+  const prelisten = new Prelisten(engine.ctx, engine.cueInput, () => engine.cueAudible);
+  const listenTitle = h('span', { class: 'listen-title' });
+  const listenTrack = h('div', { class: 'listen-track', title: 'Click to jump' }, [h('div', { class: 'listen-fill' })]);
+  listenTrack.addEventListener('pointerdown', (event) => {
+    const rect = listenTrack.getBoundingClientRect();
+    if (rect.width > 0) prelisten.seek((event.clientX - rect.left) / rect.width);
+  });
+  const listenStop = h('button', { class: 'btn btn-tiny', text: 'Stop', attrs: { type: 'button' }, on: { click: () => prelisten.stop() } });
+  const listenBar = h('div', { class: 'listen-bar', attrs: { role: 'status' } }, [h('span', { class: 'listen-icon' }), listenTitle, listenTrack, listenStop]);
+  prelisten.store.subscribe((s) => {
+    const active = s.title !== null;
+    setClass(listenBar, 'active', active);
+    setText(listenTitle, active ? `${s.title}  ${formatTime(s.position)} / ${formatTime(s.duration)}` : s.status);
+    (listenTrack.firstElementChild as HTMLElement).style.width = `${s.duration ? (s.position / s.duration) * 100 : 0}%`;
+    listenStop.hidden = !active;
+  });
+  listenStop.hidden = true;
+  const startPrelisten = async (entry: LibraryEntry): Promise<void> => {
+    try {
+      let blob: Blob;
+      if (entry.source.kind === 'demo') {
+        const audio = renderDemo(entry.source.spec, engine.ctx);
+        blob = new Blob([wavHeader(audio.length * 4, audio.sampleRate), toPcm16(audio.getChannelData(0), audio.getChannelData(1))], { type: 'audio/wav' });
+      } else {
+        blob = await entry.source.getFile();
+      }
+      await engine.resume();
+      await prelisten.play(entry.title, blob);
+    } catch (error) {
+      prelisten.stop(`Cannot prelisten "${entry.title}": ${errorText(error)}`);
+    }
+  };
+
   const history = new PlayHistory();
   void history.load();
   const historyDialog = new HistoryDialog(history);
@@ -238,6 +299,7 @@ async function boot(): Promise<void> {
           return deck ? { deck: deck.id, bpm: deck.effectiveBpm, key: deck.state.key } : null;
         },
         playedIds: () => history.playedIds(),
+        prelisten: (entry) => void startPrelisten(entry),
         load: (entry, id) => load(entry, deckById(id)),
         loadAuto: (entry) => {
           const target = decks.find((d) => !d.loaded) ?? decks.find((d) => !d.state.playing);
@@ -248,6 +310,7 @@ async function boot(): Promise<void> {
   );
 
   const console_ = h('main', { class: 'console' }, [deckViews[0]?.el ?? null, mixerView?.el ?? null, deckViews[1]?.el ?? null]);
+  if (libraryView) libraryView.el.insertBefore(listenBar, libraryView.el.children[1] ?? null);
   app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el, historyDialog.el);
 
   // The Match filter and key highlights follow the deck on air; played rows dim.
@@ -376,7 +439,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

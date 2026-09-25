@@ -56,6 +56,7 @@ export class MixerView {
   private readonly curveButton: HTMLButtonElement;
   private readonly master: Knob;
   private readonly cueVolume: Knob;
+  private readonly cueMix: Knob;
   private readonly cueMode: HTMLSelectElement;
   private readonly cueHint: HTMLElement;
 
@@ -82,6 +83,18 @@ export class MixerView {
       format: (p) => `${Math.round(p * 100)}%`,
       onInput: (p) => actions.trigger('mixer.cueVolume', p),
     });
+    this.cueMix = new Knob({
+      label: 'CUE MIX',
+      value: state.cueMix ?? 0,
+      resetTo: 0,
+      format: (p) => {
+        if (p < 0.02) return 'cue';
+        if (p > 0.98) return 'master';
+        return `${Math.round(p * 100)}% mst`;
+      },
+      onInput: (p) => actions.trigger('mixer.cueMix', p),
+    });
+    this.cueMix.el.title = 'Headphone blend: left is cue only, right is master only. Double-click resets to cue.';
     this.masterMeter = new Meter('Master');
     this.autoGainButton = actions.button(
       'mixer.autoGain',
@@ -126,6 +139,7 @@ export class MixerView {
           this.limitLed,
           this.autoGainButton,
           this.cueVolume.el,
+          this.cueMix.el,
           this.cueMode,
           this.cueHint,
         ]),
@@ -234,6 +248,7 @@ export class MixerView {
     setClass(this.autoGainButton, 'on', state.autoGain);
     this.master.setValue(state.master);
     this.cueVolume.setValue(state.cueVolume);
+    this.cueMix.setValue(state.cueMix ?? 0);
     if (!this.crossfaderDragging()) this.crossfader.value = String((state.crossfader + 1) / 2);
     this.curveButton.textContent = state.curve === 'smooth' ? 'Curve: smooth' : 'Curve: sharp';
     this.cueMode.value = state.cueMode;

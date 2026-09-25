@@ -41,6 +41,8 @@ export interface MixerState {
   cueMode: CueMode;
   /** Level each track by its measured loudness. */
   autoGain: boolean;
+  /** Headphone blend, 0 = cue only .. 1 = master only. */
+  cueMix: number;
 }
 
 /** EQ knob range, dB (Pioneer-style: deep cut, small boost). */
@@ -77,6 +79,7 @@ export function defaultMixer(): MixerState {
     cueVolume: 0.7,
     cueMode: 'off',
     autoGain: true,
+    cueMix: 0,
   };
 }
 

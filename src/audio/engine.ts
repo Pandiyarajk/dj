@@ -26,6 +26,10 @@ export class AudioEngine {
   private readonly masterGain: GainNode;
   private readonly masterOut: GainNode;
   private readonly cueBus: GainNode;
+  /** Headphone blend: cue bus and master, then the headphone level. */
+  private readonly cueMixCue: GainNode;
+  private readonly cueMixMaster: GainNode;
+  private readonly headphoneLevel: GainNode;
   private readonly limiter: DynamicsCompressorNode;
   /** Gates between the buses and the output routing, ramped around a re-route. */
   private readonly masterFade: GainNode;
@@ -49,6 +53,9 @@ export class AudioEngine {
     const cueLimiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
     this.masterFade = ctx.createGain();
     this.cueFade = ctx.createGain();
+    this.cueMixCue = ctx.createGain();
+    this.cueMixMaster = new GainNode(ctx, { gain: 0 });
+    this.headphoneLevel = ctx.createGain();
 
     for (const strip of this.strips) {
       strip.output.connect(this.masterGain);
@@ -57,7 +64,33 @@ export class AudioEngine {
     this.masterGain.connect(this.limiter).connect(this.masterOut);
     this.masterOut.connect(this.masterAnalyser);
     this.masterOut.connect(this.masterFade);
-    this.cueBus.connect(cueLimiter).connect(this.cueFade);
+    // Headphones: cue bus (limited) blended with master by CUE MIX, then the
+    // headphone level, then the output routing.
+    this.cueBus.connect(cueLimiter).connect(this.cueMixCue).connect(this.headphoneLevel);
+    this.masterOut.connect(this.cueMixMaster).connect(this.headphoneLevel);
+    this.headphoneLevel.connect(this.cueFade);
+  }
+
+  /** Input to the headphone cue bus (library prelisten plays here, never to master). */
+  get cueInput(): AudioNode {
+    return this.cueBus;
+  }
+
+  /** Whether the headphone bus is routed to any output right now. */
+  get cueAudible(): boolean {
+    return this.cueMode !== null && this.cueMode !== 'off';
+  }
+
+  /** True when the browser can switch output devices (AudioContext.setSinkId). */
+  get canChooseOutput(): boolean {
+    return typeof (this.ctx as unknown as { setSinkId?: unknown }).setSinkId === 'function';
+  }
+
+  /** Send all audio to an output device ('' = system default). */
+  async setOutputDevice(deviceId: string): Promise<void> {
+    const ctx = this.ctx as unknown as { setSinkId?: (id: string) => Promise<void> };
+    if (!ctx.setSinkId) throw new Error('This browser cannot choose an output device');
+    await ctx.setSinkId(deviceId);
   }
 
   /**
@@ -110,7 +143,11 @@ export class AudioEngine {
       this.strips[1].apply(state.channels[1], gainB, state.autoGain);
       const now = this.ctx.currentTime;
       this.masterGain.gain.setTargetAtTime(faderGain(state.master), now, 0.012);
-      this.cueBus.gain.setTargetAtTime(faderGain(state.cueVolume), now, 0.012);
+      this.headphoneLevel.gain.setTargetAtTime(faderGain(state.cueVolume), now, 0.012);
+      // Equal-power blend: 0 = cue only, 1 = master only.
+      const mix = Math.max(0, Math.min(1, state.cueMix ?? 0));
+      this.cueMixCue.gain.setTargetAtTime(Math.cos((mix * Math.PI) / 2), now, 0.012);
+      this.cueMixMaster.gain.setTargetAtTime(Math.sin((mix * Math.PI) / 2), now, 0.012);
       if (state.cueMode !== this.cueMode) this.reroute(state.cueMode === 'quad' && !this.supportsQuad ? 'off' : state.cueMode);
     };
     apply(store.get());

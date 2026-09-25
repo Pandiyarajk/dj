@@ -39,6 +39,8 @@ export interface LibraryViewHandlers {
   reference?: () => MatchReference | null;
   /** Library row ids already played this session and before. */
   playedIds?: () => Set<string>;
+  /** Hear a row in the headphones only. */
+  prelisten?: (entry: LibraryEntry) => void;
 }
 
 interface Row {
@@ -320,7 +322,19 @@ export class LibraryView {
       h('td', { class: 'col-key' }),
       h('td', { class: 'col-num' }),
     ];
-    const tr = h('tr', { attrs: { draggable: 'true' } }, [...cells, h('td', { class: 'col-load' }, [loadButton('A'), loadButton('B')])]);
+    const listen = h('button', {
+      class: 'btn btn-load btn-listen',
+      title: 'Prelisten in the headphones (not on the master)',
+      attrs: { type: 'button', 'aria-label': `Prelisten ${entry.title}` },
+      on: {
+        click: (event) => {
+          event.stopPropagation();
+          this.handlers.prelisten?.(current());
+        },
+      },
+    });
+    const loads = this.handlers.prelisten ? [listen, loadButton('A'), loadButton('B')] : [loadButton('A'), loadButton('B')];
+    const tr = h('tr', { attrs: { draggable: 'true' } }, [...cells, h('td', { class: 'col-load' }, loads)]);
     tr.addEventListener('click', () => this.select(id));
     tr.addEventListener('dblclick', () => this.handlers.loadAuto(current()));
     tr.addEventListener('dragstart', (event) => {
