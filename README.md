@@ -27,7 +27,8 @@ music stays on your machine.
 [Keyboard](#keyboard) · [MIDI controllers](#midi-controllers) ·
 [Browser support](#browser-support) · [Troubleshooting](#troubleshooting) ·
 [Privacy](#privacy) · [Known limitations](#known-limitations) ·
-[Development](#development)
+[Development](#development) ·
+**[Training course](docs/TRAINING.md)**
 
 ## Quick start
 
@@ -43,7 +44,9 @@ npm run dev
 
 Open the address Vite prints (usually <http://localhost:5173>). Browsers keep
 audio paused until you interact with the page, so click anywhere first. A
-three-step guide at the top walks you through the first mix.
+three-step guide at the top walks you through the first mix, and the
+[training course](docs/TRAINING.md) takes you from the first sound to a
+recorded mix in 14 short lessons.
 
 No music at hand? Open <http://localhost:5173/?demo=1> to load two built-in
 demo tracks (124 and 128 BPM), or use the demo rows at the top of the library.
