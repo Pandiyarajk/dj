@@ -3,6 +3,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (timeout for the 10-minute streaming test)
  */
 import { describe, expect, it } from 'vitest';
 import { autoGainDb, measureLoudness } from '../src/analysis/loudness';
@@ -47,7 +48,8 @@ describe('measureLoudness', () => {
     const start = performance.now();
     measureLoudness([tone, tone], RATE);
     expect(performance.now() - start).toBeLessThan(20000);
-  });
+    // Vitest's 5 s default killed this under parallel load before its own bound applied.
+  }, 30000);
 });
 
 describe('autoGainDb', () => {

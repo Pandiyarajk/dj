@@ -1,7 +1,7 @@
 {
   "name": "dj: browser DJ mixer",
   "short_name": "dj",
-  "description": "Two-deck DJ mixer in the browser: sync, EQ, effects, hot cues, loops, recording.",
+  "description": "Two-deck DJ mixer in the browser: key lock, sync, EQ, effects, hot cues, loops, library, recording and MIDI.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

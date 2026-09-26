@@ -10,7 +10,8 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
- * Modified: Sep-26-2026 (auto-gain strip check reads the gain after the context runs)
+ * Modified: Sep-26-2026 (auto-gain strip check reads the gain after the context runs;
+ *   waits for the browser to exit before deleting its profile)
  *
  *   node scripts/e2e.mjs [base-url] [--shot out.png]
  *   (serve first: npm run build && npm run preview)
@@ -63,6 +64,26 @@ process.on('exit', () => {
     /* browser may still hold files */
   }
 });
+
+/**
+ * Stop the browser and delete its profile. Deleting straight after kill()
+ * failed on Windows (the browser still held its files) and leaked one
+ * %TEMP%\dj-e2e-* folder per run: 200+ after a few soaks.
+ */
+async function closeBrowser() {
+  const exited = new Promise((resolve) => proc.once('exit', resolve));
+  try {
+    proc.kill();
+  } catch {
+    /* already gone */
+  }
+  await Promise.race([exited, sleep(5000)]);
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (error) {
+    console.log(`note: could not delete the test profile ${profile}: ${error.message}`);
+  }
+}
 
 async function debuggerUrl() {
   for (let i = 0; i < 80; i++) {
@@ -804,4 +825,5 @@ try {
 for (const p of problems) console.log(`PAGE  ${p}`);
 const failed = results.filter((r) => !r.ok).length + problems.length;
 console.log(failed ? `\n${failed} problem(s)` : `\nAll ${results.length} checks passed`);
+await closeBrowser();
 process.exit(failed ? 1 : 0);

@@ -1,7 +1,7 @@
 {
   "name": "dj",
   "version": "0.1.0",
-  "description": "Browser DJ mixer: two decks, EQ, crossfader, BPM sync and loops on the Web Audio API",
+  "description": "Two-deck DJ mixer in the browser: key lock, sync, EQ, effects, hot cues, loops, library, recording and MIDI.",
   "author": "Pandiyaraj Karuppasamy <pandiyarajk@live.com>",
   "license": "MIT",
   "private": true,
