@@ -11,7 +11,8 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-26-2026 (auto-gain strip check reads the gain after the context runs;
- *   waits for the browser to exit before deleting its profile)
+ *   waits for the browser to exit before deleting its profile; PERFORM fits the
+ *   dialogue pads on a 1280x800 screen)
  *
  *   node scripts/e2e.mjs [base-url] [--shot out.png]
  *   (serve first: npm run build && npm run preview)
@@ -226,6 +227,17 @@ try {
   // Performance mode hides prep controls and shrinks the library; service worker registers.
   await click('.topbar-right', 'PERFORM');
   const perform = await evaluate(`({ on: document.body.classList.contains('perform'), grid: getComputedStyle(document.querySelector('.grid-row')).display, lib: parseFloat(getComputedStyle(document.querySelector('.library-table-wrap')).maxHeight) })`);
+  // On a 1280x800 laptop screen PERFORM shows every dialogue pad and MIC
+  // without scrolling (they used to start below the fold).
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await evaluate('window.scrollTo(0, 0)');
+  await evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+  const fold = await evaluate(`(() => {
+    const pads = [...document.querySelectorAll('.dialog-pad')].map((p) => p.getBoundingClientRect().bottom);
+    return { pads: pads.length, lowest: Math.round(Math.max(...pads)), mic: Math.round(document.querySelector('.sampler-mic').getBoundingClientRect().bottom), height: innerHeight, wide: document.documentElement.scrollWidth > innerWidth };
+  })()`);
+  await send('Emulation.clearDeviceMetricsOverride');
+  check('PERFORM fits all 8 dialogue pads and MIC on a 1280x800 screen', fold.pads === 8 && fold.lowest <= fold.height && fold.mic <= fold.height && !fold.wide, JSON.stringify(fold));
   await click('.topbar-right', 'PERFORM');
   const performOff = await evaluate(`({ on: document.body.classList.contains('perform'), grid: getComputedStyle(document.querySelector('.grid-row')).display })`);
   check('PERFORM hides prep controls and shrinks the library, and back', perform.on && perform.grid === 'none' && perform.lib <= 150 && !performOff.on && performOff.grid !== 'none', JSON.stringify({ perform, performOff }));

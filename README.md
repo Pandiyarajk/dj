@@ -306,7 +306,7 @@ npm run e2e       # drive the built app in headless Chrome/Edge (run preview fir
 ```
 
 `npm run e2e` clicks through the real app and checks what the audio does, not
-just what the page shows (70 checks): audio reaches the master bus, beat grids
+just what the page shows (71 checks): audio reaches the master bus, beat grids
 match, sync stays in phase through tempo changes, hot-cue jumps and key lock,
 loops wrap in the audio thread, the kill removes the low band, echo tails ring
 out, recordings decode, prelisten stays off the master, Auto DJ hands over, MIDI

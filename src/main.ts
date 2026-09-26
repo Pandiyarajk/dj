@@ -13,7 +13,8 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (phase meter, waveform zoom, drop guard, dismissable
  *   error banner, shortcuts blocked behind the help dialog)
- * Modified: Sep-26-2026 (dialogue pads panel with talk-over)
+ * Modified: Sep-26-2026 (dialogue pads panel with talk-over; dialogue pad and
+ *   MIC LEDs on MIDI controllers)
  */
 import { DeckController, formatTime } from './audio/deck-controller';
 import { Prelisten } from './audio/prelisten';
@@ -30,7 +31,7 @@ import { SamplerView } from './ui/sampler-view';
 import { DEMO_TRACKS } from './demo/demo-tracks';
 import { Actions } from './input/actions';
 import { attachKeyboard } from './input/keyboard';
-import { MidiInput } from './input/midi';
+import { MidiInput, samplerLeds } from './input/midi';
 import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
 import { getSetting, requestPersistence, setSetting } from './library/db';
@@ -120,22 +121,6 @@ async function boot(): Promise<void> {
   const actions = new Actions();
   registerActions(actions, decks, sync, mixer);
   const midi = new MidiInput(actions);
-  // Controller LEDs follow the app: transport, sync, pads, loop, cue buttons.
-  midi.setLedSource(() => {
-    const lit = new Map<string, boolean>();
-    decks.forEach((deck, i) => {
-      const s = deck.state;
-      const d = `deck.${deck.id}`;
-      lit.set(`${d}.play`, s.playing);
-      lit.set(`${d}.cue`, s.previewing === 'cue' || (!s.playing && deck.loaded));
-      lit.set(`${d}.sync`, s.synced);
-      lit.set(`${d}.loop.toggle`, s.loop !== null);
-      lit.set(`mixer.${deck.id}.cue`, mixer.get().channels[i].cue);
-      s.hotCues.forEach((cue, n) => lit.set(`${d}.hotcue.${n + 1}`, cue !== null));
-    });
-    return lit;
-  });
-
   const load = (entry: LibraryEntry, deck: DeckController): void => {
     if (deck.state.locked) {
       deck.notice(`Deck ${deck.id} is locked (on air): unlock it to load`, 'warn');
@@ -343,6 +328,22 @@ async function boot(): Promise<void> {
   actions.register('sampler.talk', (v) => v > 0 && sampler.cycleDuck());
   actions.register('sampler.level', (v) => sampler.setLevel(v));
   void sampler.restore();
+  // Controller LEDs follow the app: transport, sync, pads, loop, cue buttons,
+  // dialogue pads and MIC (set here, once the sampler and mic exist).
+  midi.setLedSource(() => {
+    const lit = samplerLeds(sampler.store.get().pads, mic.live, performance.now());
+    decks.forEach((deck, i) => {
+      const s = deck.state;
+      const d = `deck.${deck.id}`;
+      lit.set(`${d}.play`, s.playing);
+      lit.set(`${d}.cue`, s.previewing === 'cue' || (!s.playing && deck.loaded));
+      lit.set(`${d}.sync`, s.synced);
+      lit.set(`${d}.loop.toggle`, s.loop !== null);
+      lit.set(`mixer.${deck.id}.cue`, mixer.get().channels[i].cue);
+      s.hotCues.forEach((cue, n) => lit.set(`${d}.hotcue.${n + 1}`, cue !== null));
+    });
+    return lit;
+  });
   const samplerView = start(
     'Dialogue pads',
     () =>

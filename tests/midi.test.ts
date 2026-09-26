@@ -3,10 +3,11 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (dialogue pad and MIC LEDs)
  */
 import { describe, expect, it } from 'vitest';
 import { Actions } from '../src/input/actions';
-import { decodeMidi, DEFAULT_MIDI_MAP, MidiInput, relativeTicks, type MidiBinding } from '../src/input/midi';
+import { decodeMidi, DEFAULT_MIDI_MAP, LED_BLINK_MS, MidiInput, relativeTicks, samplerLeds, type MidiBinding } from '../src/input/midi';
 import { learnBinding } from '../src/ui/midi-learn-view';
 
 function harness(bindings?: MidiBinding[]) {
@@ -85,6 +86,57 @@ describe('MidiInput', () => {
     expect(sent).toEqual([
       [0x90, 0x0b, 127],
       [0x90, 0x0b, 0],
+    ]);
+  });
+});
+
+describe('samplerLeds', () => {
+  const pad = (title: string | null, playing = false) => ({ title, playing });
+
+  it('lights pads with a clip, leaves empty pads dark, and lights MIC while live', () => {
+    const lit = samplerLeds([pad('Intro'), pad(null), pad('Drop')], true, 0);
+    expect(lit.get('sampler.pad1')).toBe(true);
+    expect(lit.get('sampler.pad2')).toBe(false);
+    expect(lit.get('sampler.pad3')).toBe(true);
+    expect(lit.get('sampler.mic')).toBe(true);
+    expect(samplerLeds([pad('Intro')], false, 0).get('sampler.mic')).toBe(false);
+  });
+
+  it('blinks a playing pad and keeps a loaded pad steady', () => {
+    const at = (now: number) => samplerLeds([pad('Intro', true), pad('Drop')], false, now);
+    expect(at(0).get('sampler.pad1')).toBe(true);
+    expect(at(LED_BLINK_MS).get('sampler.pad1')).toBe(false);
+    expect(at(2 * LED_BLINK_MS).get('sampler.pad1')).toBe(true);
+    expect(at(LED_BLINK_MS).get('sampler.pad2')).toBe(true);
+  });
+
+  it('drives learned pad and MIC notes through the LED diffing', () => {
+    const actions = new Actions();
+    let bindings = learnBinding([], 'sampler.pad1', { kind: 'note', channel: 5, number: 0x20, value: 127, pressed: true }, 'button');
+    bindings = learnBinding(bindings, 'sampler.mic', { kind: 'note', channel: 5, number: 0x28, value: 127, pressed: true }, 'button');
+    const midi = new MidiInput(actions, bindings);
+    const sent: number[][] = [];
+    const state = { title: null as string | null, playing: false, live: false, now: 0 };
+    midi.setLedSource(() => samplerLeds([pad(state.title, state.playing)], state.live, state.now));
+    const step = (change: Partial<typeof state>) => {
+      Object.assign(state, change);
+      midi.updateLeds((b) => sent.push(b));
+    };
+    step({});
+    step({ title: 'Intro' });
+    step({ playing: true, now: LED_BLINK_MS });
+    step({ now: 2 * LED_BLINK_MS });
+    step({ now: 2 * LED_BLINK_MS + 50 });
+    step({ live: true });
+    step({ playing: false, live: false });
+    expect(sent).toEqual([
+      [0x95, 0x20, 0],
+      [0x95, 0x28, 0],
+      [0x95, 0x20, 127],
+      [0x95, 0x20, 0],
+      [0x95, 0x20, 127],
+      [0x95, 0x28, 127],
+      [0x95, 0x28, 0],
     ]);
   });
 });
