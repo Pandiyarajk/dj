@@ -47,6 +47,7 @@ self.onmessage = (event: MessageEvent<AnalysisRequest>) => {
       bpm: tempo?.bpm ?? null,
       firstBeat: tempo?.firstBeat ?? 0,
       confidence: tempo?.confidence ?? 0,
+      tempoChanges: tempo?.tempoChanges ?? false,
       lufs: Number.isFinite(loudness.lufs) ? loudness.lufs : null,
       peakDb: Number.isFinite(loudness.peakDb) ? loudness.peakDb : null,
       key: key?.camelot ?? null,

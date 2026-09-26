@@ -5,10 +5,13 @@
  *   1. Onset-strength envelope: log-compressed energy flux in five bands, each
  *      normalised to equal weight and summed, at about 200 frames per second.
  *      Computed in one streaming pass, so memory is O(frames), not O(samples).
- *   2. Candidates: the strongest autocorrelation peaks over 60-200 BPM of a
- *      40 s excerpt, folded into [MIN_BPM, MAX_BPM), plus doubles and halves.
- *   3. Selection: a comb scored on the excerpt; the candidate whose beats carry
- *      the most onset energy wins.
+ *   2. Candidates: the strongest autocorrelation peaks over 60-200 BPM of each
+ *      40 s window (20 s apart), folded into [MIN_BPM, MAX_BPM), plus doubles
+ *      and halves.
+ *   3. Selection: in each window, a comb scored on the window picks a local
+ *      tempo; windows with a clear beat vote, and the tempo that covers the
+ *      most of the track wins. A track whose windows disagree is flagged as
+ *      changing tempo (its grid follows the main tempo).
  *   4. Octave choice: half, same and double tempo are weighed by their comb
  *      score times a tempo prior centred on 135 BPM.
  *   5. Precision: the comb over the whole track, with a step scaled to its
@@ -21,7 +24,9 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-26-2026 (phase z-score gate added; onset-strength gate
- *   lowered from 0.8 to 0.5, which rejected three of ten real songs)
+ *   lowered from 0.8 to 0.5, which rejected three of ten real songs;
+ *   tempo voted across windows, so a song that changes tempo follows its
+ *   main tempo and is flagged)
  */
 import { LowPass } from './filters';
 
@@ -32,6 +37,8 @@ export interface BpmResult {
   firstBeat: number;
   /** 0..1, how far beat positions stand out from the average envelope. */
   confidence: number;
+  /** Part of the track has a different tempo (the grid follows the main one). */
+  tempoChanges: boolean;
 }
 
 export const MIN_BPM = 70;
@@ -68,6 +75,24 @@ const MIN_PHASE_Z = 2.7;
 const PHASE_Z_STEP = 0.5;
 /** Seconds of envelope used to rank candidates: long enough to separate them, short enough that a coarse step cannot drift off the beats. */
 const EXCERPT_SECONDS = 40;
+/** Step between tempo windows, seconds (windows overlap by half). */
+const WINDOW_HOP_SECONDS = 20;
+/** A window votes only when its beat stands out this clearly (beatless stretches do not vote). */
+const MIN_WINDOW_CONFIDENCE = 0.55;
+/** Local tempos within this fraction of each other are the same tempo. */
+const TEMPO_TOLERANCE = 0.02;
+/**
+ * Another tempo holding at least this share of the voting windows means the
+ * track changes tempo. A film song at 98 BPM with a 135 BPM finale read 135
+ * when only the loudest 40 s were used (the finale was the loudest part).
+ */
+const TEMPO_CHANGE_SHARE = 0.2;
+/**
+ * Tempo ratios that are the same pulse felt differently (triplet feel, 6/8):
+ * windows alternating 96/144 or 110/147 are one ambiguous metre, not a
+ * tempo change.
+ */
+const METRIC_RATIOS = [3 / 2, 4 / 3];
 /** Largest drift, in seconds, the final tempo step may cause across the whole track. */
 const MAX_DRIFT_SECONDS = 0.004;
 /** Upper edges of the onset bands, Hz; everything above the last edge is the top band. */
@@ -320,27 +345,27 @@ function prior(bpm: number): number {
  * BPM step drifts ~90 ms over a 4-minute track, enough for a 2/3-tempo
  * candidate to win.
  */
-function wholeTrackTempo(env: Envelope, estimate: number): { bpm: number; phase: number; score: number } {
+function wholeTrackTempo(env: Envelope, estimate: number, spread = 0): { bpm: number; phase: number; score: number } {
   const duration = env.values.length / env.frameRate;
   const step = Math.max(0.0005, (estimate * MAX_DRIFT_SECONDS) / duration);
-  const fine = refine(env, estimate, Math.max(0.03, step * 4), step);
+  // Never wider than 1% either way: the search is whole-track and fine-stepped.
+  const span = Math.min(estimate * 0.01, Math.max(0.03, step * 4, spread / 2 + 0.03));
+  const fine = refine(env, estimate, span, step);
   return { bpm: fine.bpm, ...subFramePhase(env, fine.bpm, fine.phase, fine.score) };
 }
 
-/**
- * Detect tempo and first-beat offset of a mono signal.
- *
- * @param samples mono PCM, -1..1.
- * @param sampleRate sample rate of `samples`.
- * @returns the result, or null for silence or audio too short to analyse (under ~5 s).
- */
-export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult | null {
-  const env = onsetEnvelope(samples, sampleRate);
-  const part = excerpt(env, EXCERPT_SECONDS);
+interface LocalTempo {
+  bpm: number;
+  score: number;
+  confidence: number;
+}
+
+/** The best tempo of one stretch of envelope: candidates, comb ranking, refinement, octave choice. */
+function localTempo(part: Envelope): LocalTempo | null {
   const candidates = tempoCandidates(part);
   if (candidates.length === 0) return null;
 
-  // Rank every candidate cheaply on the excerpt, refine the best two there.
+  // Rank every candidate cheaply on the stretch, refine the best two there.
   let best = candidates
     .map((bpm) => refine(part, bpm, bpm * 0.02, 0.1))
     .sort((x, y) => y.score - x.score)
@@ -357,7 +382,98 @@ export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult 
     .map((b) => (b === best.bpm ? best : refine(part, b, 0.12, 0.01)))
     .reduce((top, r) => (r.score * prior(r.bpm) > top.score * prior(top.bpm) ? r : top));
 
-  const result = wholeTrackTempo(env, best.bpm);
+  let mean = 0;
+  for (let i = 0; i < part.values.length; i++) mean += part.values[i];
+  mean /= part.values.length;
+  const confidence = best.score > 0 ? (best.score - mean) / best.score : 0;
+  return { bpm: best.bpm, score: best.score, confidence };
+}
+
+/** Overlapping windows across the whole envelope; empty when the track is too short for two. */
+function tempoWindows(env: Envelope): Envelope[] {
+  const length = Math.round(EXCERPT_SECONDS * env.frameRate);
+  const hop = Math.round(WINDOW_HOP_SECONDS * env.frameRate);
+  if (env.values.length < length + hop) return [];
+  const windows: Envelope[] = [];
+  for (let start = 0; start + length <= env.values.length; start += hop) windows.push({ ...env, values: env.values.subarray(start, start + length) });
+  // The tail, so the end of the track votes too.
+  const tail = env.values.length - length;
+  if (tail % hop !== 0) windows.push({ ...env, values: env.values.subarray(tail) });
+  return windows;
+}
+
+/**
+ * The tempo that covers the most of the track, from each window's local
+ * tempo. Octaves count as the same tempo for the vote (so a window that read
+ * half time does not split it); the octave most windows chose wins.
+ *
+ * @returns the estimate and whether a second tempo holds a real share, or
+ *   null when no window has a clear beat.
+ */
+function votedTempo(windows: Envelope[]): { bpm: number; low: number; high: number; tempoChanges: boolean } | null {
+  const votes = windows.map(localTempo).filter((t): t is LocalTempo => t !== null && t.confidence >= MIN_WINDOW_CONFIDENCE);
+  if (votes.length === 0) return null;
+  const fold = (bpm: number): number => {
+    let f = bpm;
+    while (f < PRIOR_BPM / Math.SQRT2) f *= 2;
+    while (f >= PRIOR_BPM * Math.SQRT2) f /= 2;
+    return f;
+  };
+  // Greedy clusters on the octave-folded tempo.
+  const clusters: { folded: number; members: LocalTempo[] }[] = [];
+  for (const vote of [...votes].sort((a, b) => fold(a.bpm) - fold(b.bpm))) {
+    const folded = fold(vote.bpm);
+    const cluster = clusters.find((c) => Math.abs(folded - c.folded) / c.folded <= TEMPO_TOLERANCE);
+    if (cluster) cluster.members.push(vote);
+    else clusters.push({ folded, members: [vote] });
+  }
+  clusters.sort((a, b) => b.members.length - a.members.length || b.members.reduce((s, m) => s + m.score, 0) - a.members.reduce((s, m) => s + m.score, 0));
+  const main = clusters[0];
+  // The octave most of the main tempo's windows chose, then their median tempo in it.
+  const byOctave = new Map<number, LocalTempo[]>();
+  for (const m of main.members) {
+    const octave = Math.round(Math.log2(m.bpm / main.folded));
+    byOctave.set(octave, [...(byOctave.get(octave) ?? []), m]);
+  }
+  const chosen = [...byOctave.values()].sort((a, b) => b.length - a.length)[0];
+  const sorted = chosen.map((m) => m.bpm).sort((a, b) => a - b);
+  const bpm = sorted[Math.floor(sorted.length / 2)];
+  const metric = (a: number, b: number): boolean => {
+    const ratio = Math.max(a, b) / Math.min(a, b);
+    return METRIC_RATIOS.some((r) => Math.abs(ratio - r) / r <= TEMPO_TOLERANCE);
+  };
+  const tempoChanges = clusters.slice(1).some((c) => c.members.length / votes.length >= TEMPO_CHANGE_SHARE && !metric(c.folded, main.folded));
+  // The spread of the main tempo's windows: a drifting live drummer reads
+  // 109.1-110.9 across windows, and the whole-track search must cover it.
+  return { bpm, low: sorted[0], high: sorted[sorted.length - 1], tempoChanges };
+}
+
+/**
+ * Detect tempo and first-beat offset of a mono signal.
+ *
+ * @param samples mono PCM, -1..1.
+ * @param sampleRate sample rate of `samples`.
+ * @returns the result, or null for silence or audio too short to analyse (under ~5 s).
+ */
+export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult | null {
+  const env = onsetEnvelope(samples, sampleRate);
+  // Vote across the track; short tracks (or no clear window) fall back to the
+  // stretch with the most onset energy.
+  let estimate: number;
+  let spread = 0;
+  let tempoChanges = false;
+  const voted = votedTempo(tempoWindows(env));
+  if (voted) {
+    estimate = (voted.low + voted.high) / 2;
+    spread = voted.high - voted.low;
+    tempoChanges = voted.tempoChanges;
+  } else {
+    const local = localTempo(excerpt(env, EXCERPT_SECONDS));
+    if (!local) return null;
+    estimate = local.bpm;
+  }
+
+  const result = wholeTrackTempo(env, estimate, spread);
   let mean = 0;
   for (let i = 0; i < env.values.length; i++) mean += env.values[i];
   mean /= env.values.length;
@@ -373,5 +489,5 @@ export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult 
   if (confidence < MIN_CONFIDENCE) return null;
   // Full precision: rounding to 0.01 BPM drifted a synced mix ~12 ms per 5
   // minutes, three times the detector's own budget. Round only for display.
-  return { bpm: result.bpm, firstBeat, confidence };
+  return { bpm: result.bpm, firstBeat, confidence, tempoChanges };
 }

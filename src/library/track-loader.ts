@@ -244,6 +244,7 @@ export class TrackLoader {
       lufs: result.lufs,
       peakDb: result.peakDb,
       camelot: result.key,
+      tempoChanges: result.tempoChanges,
       analysisVersion: ANALYSIS_VERSION,
     };
     updateTrack(info.key, (existing) =>

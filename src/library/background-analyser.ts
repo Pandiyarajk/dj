@@ -129,6 +129,7 @@ export class BackgroundAnalyser {
         lufs: result.lufs,
         peakDb: result.peakDb,
         camelot: result.key,
+        tempoChanges: result.tempoChanges,
         analysisVersion: ANALYSIS_VERSION,
       };
       // Merge: cues saved from a deck in the meantime must survive.

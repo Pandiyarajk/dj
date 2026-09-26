@@ -22,6 +22,8 @@ export interface AnalysisResult {
   bpm: number | null;
   firstBeat: number;
   confidence: number;
+  /** Part of the track has a different tempo (the grid follows the main one). */
+  tempoChanges: boolean;
   /** Integrated loudness, LUFS; null for silence. */
   lufs: number | null;
   /** Sample peak, dBFS. */

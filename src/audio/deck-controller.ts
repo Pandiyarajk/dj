@@ -59,6 +59,8 @@ export interface SavedTrackData {
   peakDb?: number | null;
   /** Camelot key code, "8A" (not `key`: that is the cache record's identity). */
   camelot?: string | null;
+  /** Part of the track has a different tempo (absent on older records). */
+  tempoChanges?: boolean;
   cuePoint: number;
   hotCues: (number | null)[];
 }
@@ -304,7 +306,7 @@ export class DeckController {
     this.cueChosen = (saved?.cuePoint ?? 0) > 0;
     this.store.set({
       status: 'ready',
-      statusText: analysed ? readyText(bpm) : 'Analysing...',
+      statusText: analysed ? readyText(bpm, saved?.tempoChanges ?? false) : 'Analysing...',
       track: info,
       playing: false,
       previewing: null,
@@ -335,7 +337,7 @@ export class DeckController {
     this.store.set({ analysis: fraction, statusText: `Analysing ${Math.round(fraction * 100)}%` });
   }
 
-  setAnalysis(result: { bpm: number | null; firstBeat: number; peaks: Peaks; lufs: number | null; peakDb: number | null; key: string | null }): void {
+  setAnalysis(result: { bpm: number | null; firstBeat: number; peaks: Peaks; lufs: number | null; peakDb: number | null; key: string | null; tempoChanges?: boolean }): void {
     this.setLoudness(result.lufs, result.peakDb);
     this.store.set({
       bpm: result.bpm,
@@ -343,7 +345,7 @@ export class DeckController {
       key: result.key ?? this.state.key,
       peaks: result.peaks,
       analysis: null,
-      statusText: readyText(result.bpm),
+      statusText: readyText(result.bpm, result.tempoChanges ?? false),
     });
     this.applyAutoCue();
   }
@@ -891,8 +893,10 @@ export class DeckController {
   }
 }
 
-function readyText(bpm: number | null): string {
-  return bpm === null ? 'Ready (no steady beat found)' : 'Ready';
+/** Deck status after analysis: says when there is no grid, or when it fits only the main tempo. */
+function readyText(bpm: number | null, tempoChanges: boolean): string {
+  if (bpm === null) return 'Ready (no steady beat found)';
+  return tempoChanges ? 'Ready (tempo changes: the grid follows the main tempo)' : 'Ready';
 }
 
 export function formatTime(seconds: number): string {

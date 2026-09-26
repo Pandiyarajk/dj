@@ -3,7 +3,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
- * Modified: Sep-26-2026 (brown noise must read no beat)
+ * Modified: Sep-26-2026 (brown noise must read no beat; tempo changes)
  */
 import { describe, expect, it } from 'vitest';
 import { detectBpm } from '../src/analysis/bpm';
@@ -88,5 +88,25 @@ describe('detectBpm', () => {
     expect(detectBpm(new Float32Array(SAMPLE_RATE * 20), SAMPLE_RATE)).toBeNull();
     const short = renderPattern({ bpm: 120, seconds: 2, sampleRate: SAMPLE_RATE, style: 'clicks' });
     expect(detectBpm(short, SAMPLE_RATE)).toBeNull();
+  });
+
+  it('follows the main tempo of a track that changes tempo, and flags it', () => {
+    // 80 s at 98 BPM, then a louder 30 s finale at 135 (a film song read 135
+    // when only the loudest 40 s were used).
+    const rate = 22050;
+    const main = renderPattern({ bpm: 98, seconds: 80, sampleRate: rate, style: 'house', offset: 0.2, bassHz: 55 });
+    const finale = renderPattern({ bpm: 135, seconds: 30, sampleRate: rate, style: 'house', offset: 0.1, bassHz: 55 }).map((v) => v * 1.4);
+    const track = new Float32Array(main.length + finale.length);
+    track.set(main);
+    track.set(finale, main.length);
+    const result = detectBpm(track, rate);
+    expect(result?.bpm).toBeCloseTo(98, 1);
+    expect(result?.tempoChanges).toBe(true);
+  });
+
+  it('does not flag a steady track as changing tempo', () => {
+    const result = detectBpm(renderPattern({ bpm: 124, seconds: 120, sampleRate: 22050, style: 'house', offset: 0.12, bassHz: 55 }), 22050);
+    expect(result?.bpm).toBeCloseTo(124, 1);
+    expect(result?.tempoChanges).toBe(false);
   });
 });

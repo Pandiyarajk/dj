@@ -277,14 +277,15 @@ is on.
 
 ## Known limitations
 
-- **BPM:** constant-tempo grids only. A song that changes tempo gets one grid
-  (a film song at 98 BPM with a 135 BPM finale read 135), and a live drummer
-  who drifts reads close but not exact (110.86 for 110). A pattern genuinely
-  ambiguous between two tempos (half or double, or 2:3 in a triplet feel) can
-  pick the other one, and a song with a weak beat reads "no steady beat": use
-  /2, x2 or TAP. On 10 real songs, 6 matched an independent analyser (librosa),
-  1 more was half/double, 1 was a genuine 2:3 tie and 1 is the tempo change
-  above.
+- **BPM:** one constant grid per track. The tempo is voted across the whole
+  track, so a song that changes tempo gets the grid of its main tempo, and the
+  deck says "tempo changes: the grid follows the main tempo" (a film song at
+  98 BPM with a 135 BPM finale reads 98). A live drummer who drifts reads
+  close but not exact (110.86 for 110). A pattern genuinely ambiguous between
+  two tempos (half or double, or 2:3 in a triplet feel) can pick the other
+  one, and a song with a weak beat reads "no steady beat": use /2, x2 or TAP.
+  On 10 real songs, 7 matched an independent analyser (librosa), 1 more was
+  half/double and 1 was a genuine 2:3 tie.
 - **Key:** 15 of 17 on the synthetic test corpus; not yet measured on real
   music. Most misses are harmonically compatible neighbours.
 - **Key lock:** transients can smear a little beyond about +/-8%, and sub-bass
