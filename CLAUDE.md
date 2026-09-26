@@ -82,7 +82,7 @@ MIDI), `scripts/` (e2e driver, corpus generator), `tests/` (Vitest).
   only arrow keys, never the letter shortcuts.
 - The compressor's `reduction` freezes when its input goes silent: gate the
   LIMIT light on signal.
-- `npm run e2e` has 63 checks; soak it (10+ runs) after touching sync, the
+- `npm run e2e` has 70 checks; soak it (10+ runs) after touching sync, the
   worklet or the library: several bugs here showed up 1 run in 5 to 1 in 12.
 - Worklet code is unit-tested through `tests/worklet-harness.ts` (stubs the
   AudioWorkletGlobalScope). Loop points are fractional frames: floor any
@@ -111,5 +111,17 @@ MIDI), `scripts/` (e2e driver, corpus generator), `tests/` (Vitest).
 - e2e downloads go to the test profile (`Browser.setDownloadBehavior`), never
   the user's Downloads folder; profiles live in `%TEMP%\dj-e2e-*` and must be
   cleaned up.
+- Dialogue pads and the mic join the master *before* the limiter
+  (`engine.samplerInput`); the decks go through `musicBus`, which ducks. Pads
+  and mic report on/off to one `TalkOver` arbiter (`audio/sampler.ts`); never
+  call `engine.duck()` directly, or one source's release un-ducks the other
+  (a cached per-source flag once left the music ducked with nothing playing).
+- Sampler clips and settings are stored under separate keys: a LEVEL sweep
+  used to rewrite up to 160 MB of clips per slider event.
+- The e2e browser runs with a fake microphone
+  (`--use-fake-device-for-media-stream`); keep those flags.
+- e2e checks must not depend on the run's pace: a track audible for 30 s
+  counts as played (history) and changes Match ranking; Chrome's fake mic beeps
+  about once a second, so listen for 1.5 s, not a few hundred ms.
 - There is no Prettier config: do not run Prettier (it rewrote 243 lines of
   the worklet into a different style). Match the surrounding formatting.

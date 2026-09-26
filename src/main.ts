@@ -13,6 +13,7 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (phase meter, waveform zoom, drop guard, dismissable
  *   error banner, shortcuts blocked behind the help dialog)
+ * Modified: Sep-26-2026 (dialogue pads panel with talk-over)
  */
 import { DeckController, formatTime } from './audio/deck-controller';
 import { Prelisten } from './audio/prelisten';
@@ -23,13 +24,16 @@ import { AudioEngine } from './audio/engine';
 import { defaultMixer, type MixerState } from './audio/mixer';
 import { AutoDj } from './audio/auto-dj';
 import { SyncCoordinator } from './audio/sync-coordinator';
+import { Sampler, TalkOver, type StoredSampler } from './audio/sampler';
+import { LiveMic } from './audio/live-mic';
+import { SamplerView } from './ui/sampler-view';
 import { DEMO_TRACKS } from './demo/demo-tracks';
 import { Actions } from './input/actions';
 import { attachKeyboard } from './input/keyboard';
 import { MidiInput } from './input/midi';
 import { registerActions } from './input/register-actions';
 import { errorText, Library, type LibraryEntry } from './library/library';
-import { requestPersistence } from './library/db';
+import { getSetting, requestPersistence, setSetting } from './library/db';
 import { BackgroundAnalyser } from './library/background-analyser';
 import { Crates } from './library/crates';
 import { PLAYED_AFTER, PlayHistory } from './library/history';
@@ -291,21 +295,71 @@ async function boot(): Promise<void> {
     listenStop.hidden = !active;
   });
   listenStop.hidden = true;
+  /** The audio bytes of a library row: the file, or a demo track rendered to WAV. */
+  const entryBlob = async (entry: LibraryEntry): Promise<Blob> => {
+    if (entry.source.kind !== 'demo') return entry.source.getFile();
+    const audio = renderDemo(entry.source.spec, engine.ctx);
+    return new Blob([wavHeader(audio.length * 4, audio.sampleRate), toPcm16(audio.getChannelData(0), audio.getChannelData(1))], { type: 'audio/wav' });
+  };
   const startPrelisten = async (entry: LibraryEntry): Promise<void> => {
     try {
-      let blob: Blob;
-      if (entry.source.kind === 'demo') {
-        const audio = renderDemo(entry.source.spec, engine.ctx);
-        blob = new Blob([wavHeader(audio.length * 4, audio.sampleRate), toPcm16(audio.getChannelData(0), audio.getChannelData(1))], { type: 'audio/wav' });
-      } else {
-        blob = await entry.source.getFile();
-      }
+      const blob = await entryBlob(entry);
       await engine.resume();
       await prelisten.play(entry.title, blob);
     } catch (error) {
       prelisten.stop(`Cannot prelisten "${entry.title}": ${errorText(error)}`);
     }
   };
+
+  // ---- dialogue pads and the live mic ----
+  // The music ducks while any pad plays on the master or the mic is live, by
+  // the TALK depth the pads panel sets.
+  const talkOver = new TalkOver((db) => engine.duck(db));
+  const sampler = new Sampler(engine.ctx, engine.samplerInput, engine.cueInput, () => engine.cueAudible, (on) => talkOver.set('pads', on), {
+    // Clips and settings live under separate keys (a LEVEL sweep must not rewrite the clips).
+    load: async () => ({ ...((await getSetting<StoredSampler>('sampler')) ?? {}), ...((await getSetting<StoredSampler>('sampler.settings')) ?? {}) }),
+    saveClips: (pads) => setSetting('sampler', { pads }),
+    saveSettings: (settings) => setSetting('sampler.settings', settings),
+  });
+  sampler.store.subscribe((s) => talkOver.setDepth(s.duckDb));
+  talkOver.setDepth(sampler.store.get().duckDb);
+  // The mic goes straight to the master (limited and recorded), not through
+  // the dialogue LEVEL: at LEVEL 0 it would show ON AIR and send nothing.
+  const mic = new LiveMic(engine.ctx, engine.samplerInput, (live) => talkOver.set('mic', live), navigator.mediaDevices?.getUserMedia ? (c) => navigator.mediaDevices.getUserMedia(c) : null);
+  actions.register('sampler.mic', (v) => {
+    if (v > 0) {
+      void engine.resume();
+      void mic.down();
+    } else mic.up();
+  });
+  // Resume first: a MIDI press after the OS suspended the context would light the pad in silence.
+  for (let i = 0; i < 8; i++)
+    actions.register(`sampler.pad${i + 1}`, (v) => {
+      if (v <= 0) return;
+      void engine.resume();
+      sampler.press(i);
+    });
+  actions.register('sampler.stop', (v) => v > 0 && sampler.stopAll());
+  actions.register('sampler.talk', (v) => v > 0 && sampler.cycleDuck());
+  actions.register('sampler.level', (v) => sampler.setLevel(v));
+  void sampler.restore();
+  const samplerView = start(
+    'Dialogue pads',
+    () =>
+      new SamplerView(sampler, mic, actions, {
+        onEntry: (index, entryId) => {
+          const entry = library.store.get().entries.find((e) => e.id === entryId);
+          if (!entry) {
+            sampler.store.set({ status: 'That track is no longer in the library' });
+            return;
+          }
+          sampler.store.set({ status: `Reading "${entry.title}" for pad ${index + 1}...` });
+          void entryBlob(entry)
+            .then((blob) => sampler.assign(index, entry.title, blob))
+            .catch((error) => sampler.store.set({ status: `"${entry.title}" not added: ${errorText(error)}` }));
+        },
+      }),
+  );
 
   const autoDj = new AutoDj(decks, loader, sync, mixer);
   const autoButton = h('button', { class: 'btn btn-small btn-autodj', text: 'Auto DJ', title: 'Play the tracks on screen from the selected one, with synced crossfades', attrs: { type: 'button' } });
@@ -359,7 +413,7 @@ async function boot(): Promise<void> {
 
   const console_ = h('main', { class: 'console' }, [deckViews[0]?.el ?? null, mixerView?.el ?? null, deckViews[1]?.el ?? null]);
   if (libraryView) libraryView.el.insertBefore(listenBar, libraryView.el.children[1] ?? null);
-  app.replaceChildren(topbar, errorBanner, waves, console_, libraryView?.el ?? h('div'), help.el, historyDialog.el, learnDialog.el);
+  app.replaceChildren(topbar, errorBanner, waves, console_, samplerView?.el ?? h('div'), libraryView?.el ?? h('div'), help.el, historyDialog.el, learnDialog.el);
 
   autoButton.addEventListener('click', () => autoDj.toggle(() => libraryView?.queueFromHere() ?? []));
 
@@ -551,7 +605,7 @@ async function boot(): Promise<void> {
   session.start();
   if (params.get('debug') === '1') {
     // Test hook for the end-to-end driver (scripts/e2e.mjs); not used by the app.
-    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi, crates, autoDj } });
+    Object.assign(window, { dj: { engine, decks, mixer, library, sync, loader, session, background, history, recorder, prelisten, midi, crates, autoDj, sampler, mic } });
   }
   if (params.get('demo') === '1') {
     const entries = library.store.get().entries;

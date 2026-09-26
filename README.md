@@ -3,8 +3,9 @@
 A two-deck DJ mixer that runs in the browser: beat-matched playback with key
 lock, BPM, key and loudness analysis, sync, a 3-band isolator EQ with true
 kills, filters and effects, hot cues, loops, a library with crates and
-suggestions, Auto DJ, mix recording, headphone cue and MIDI controllers. No
-install, no account, no upload: your music stays on your machine.
+suggestions, Auto DJ, dialogue pads and a push-to-talk mic, mix recording,
+headphone cue and MIDI controllers. No install, no account, no upload: your
+music stays on your machine.
 
 > **Disclaimer.** This software is provided **AS IS**, without warranty of any
 > kind, express or implied. **Use it entirely at your own risk.** The authors
@@ -156,6 +157,31 @@ The **phase meter** between the waveforms shows how far deck B's beat is from
 deck A's ("In phase", or "B 12 ms ahead"). `+` and `-` zoom both waveforms. A
 playing track with under 30 seconds left flashes red.
 
+### Dialogue pads and live mic
+
+The **DIALOGUES** panel under the console fires short clips over the mix: a movie
+dialogue, a sound drop, a "punch" line for the moment.
+
+- **Put a clip on a pad:** drag an audio file onto it, drag a track from the
+  library onto it, or use the pad's *Load* button. Clips up to 60 seconds and
+  20 MB; longer audio belongs on a deck.
+- **Press a pad** to play its clip from the start; press it again to cut it
+  short. Pads can overlap. Numpad 1 to 8 fire them, `B` stops them all.
+- **Shift+click** previews a pad in the headphones only (needs a headphone
+  route); it shows PFL, and pressing the pad then sends it live.
+  **Right-click** or the *×* button clears it.
+- **TALK** sets how far the music dips while a dialogue or the mic is on
+  (off, -6, -10 or -16 dB). **LEVEL** sets the dialogue level (the mic's level
+  is set in your system's input settings).
+- **MIC** is push-to-talk: hold it (or Numpad 0) to speak live over the mix; it
+  shows ON AIR while held and mutes on release. The browser asks for the
+  microphone the first time. Keep the mic away from the speakers to avoid
+  feedback.
+
+Pads and their clips are saved in the browser, so they are still there after a
+reload. Dialogues and the mic go through the master limiter and into a REC
+recording.
+
 ### Recording, Auto DJ and performance mode
 
 - **REC** records the master output as a WAV file. In Chrome and Edge it
@@ -193,6 +219,9 @@ Press `?` in the app for the full list.
 | V | Add the selected track to the crate |
 | `=` / `-` | Zoom the waveforms |
 | Ctrl+Z | Undo the last load |
+| Numpad 1 to 8 | Fire dialogue pads 1 to 8 (press again to stop) |
+| B | Stop every dialogue |
+| Numpad 0 (hold) | Mic: talk live over the mix |
 
 Keys are matched by position, so the layout is the same on non-QWERTY
 keyboards. Shortcuts keep working after you touch a fader, and pause while a
@@ -240,6 +269,12 @@ CDN, no uploads. Music is read from your disk by the browser, and everything
 the app remembers (analysis, cues, crates, history, settings) is stored in your
 browser's own storage on this machine.
 
+The microphone is used only for push-to-talk. After the first press the
+browser keeps it open (and shows it as in use) so later presses are instant,
+but its sound is muted except while MIC is held, and it never leaves this
+machine: it plays through your speakers, and into a recording only while REC
+is on.
+
 ## Known limitations
 
 - **BPM:** constant-tempo grids only. A song that changes tempo gets one grid
@@ -271,11 +306,13 @@ npm run e2e       # drive the built app in headless Chrome/Edge (run preview fir
 ```
 
 `npm run e2e` clicks through the real app and checks what the audio does, not
-just what the page shows (63 checks): audio reaches the master bus, beat grids
+just what the page shows (70 checks): audio reaches the master bus, beat grids
 match, sync stays in phase through tempo changes, hot-cue jumps and key lock,
 loops wrap in the audio thread, the kill removes the low band, echo tails ring
 out, recordings decode, prelisten stays off the master, Auto DJ hands over, MIDI
-bytes drive the decks, and reloads restore the cache and the session. It needs
+bytes drive the decks, dialogue pads play over the master and duck the decks,
+the push-to-talk mic (Chrome's fake microphone) goes on air and mutes, and
+reloads restore the cache, the session and the pads. It needs
 Chrome or Edge installed (set `CHROME_PATH` if it is not found). Some bugs here
 have shown up only 1 run in 5 to 1 in 12, so run it several times after
 touching sync, the audio worklet or the library.

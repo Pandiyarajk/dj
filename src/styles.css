@@ -7,7 +7,7 @@
  *   icons, LCD readouts; hot-cue colours, track-end warning, limiter LED,
  *   phase meter, zoom, tablet and phone layouts, reduced-motion feedback)
  * Modified: Sep-26-2026 (library load and +/- columns no longer clip; top
- *   bar wraps on phones instead of scrolling the page sideways)
+ *   bar wraps on phones instead of scrolling the page sideways; dialogue pads)
  *
  * System fonts only: the app makes no network requests, so a font CDN would
  * break the "your music stays on your machine" promise.
@@ -34,6 +34,8 @@
   --good: #3ddc97;
   --warn: #f5c542;
   --bad: #ff5d5d;
+  /* Dialogue pads: their own colour, distinct from both decks. */
+  --dialog: #ff5fd2;
 
   --btn-top: #242c39;
   --btn-bottom: #1b222c;
@@ -126,6 +128,7 @@ body {
 .deck,
 .mixer,
 .library,
+.sampler-panel,
 .waves {
   background: linear-gradient(180deg, var(--panel-hi), var(--panel));
   border: 1px solid var(--line);
@@ -351,6 +354,7 @@ th.sortable:focus-visible {
 }
 
 /* Performance mode: hide prep controls, keep what is played live. */
+body.perform .dialog-tools,
 body.perform .grid-row,
 body.perform .loop-row:has(.btn[aria-label^='Loop in point']),
 body.perform .autogain-readout,
@@ -360,6 +364,10 @@ body.perform .listen-bar:not(.active),
 body.perform .zoom-tools,
 body.perform .phase-meter .phase-bar {
   display: none;
+}
+
+body.perform .dialog-pad {
+  min-height: 42px;
 }
 
 body.perform .library-table-wrap {
@@ -2111,9 +2119,264 @@ kbd {
 }
 
 /* Narrow: one column in DOM order, so the mixer sits between the decks. */
+/* ---- dialogue pads ------------------------------------------------------ */
+
+.sampler-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+.sampler-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sampler-heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--dialog);
+}
+
+.sampler-status {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sampler-level-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.sampler-level {
+  width: 96px;
+  height: 20px;
+}
+
+.sampler-level::-webkit-slider-runnable-track {
+  height: 5px;
+}
+
+.sampler-level::-webkit-slider-thumb {
+  width: 12px;
+  height: 18px;
+  margin-top: -7px;
+  background: linear-gradient(90deg, #2a3240 0 35%, var(--dialog) 35% 65%, #2a3240 65%);
+}
+
+.sampler-level::-moz-range-thumb {
+  width: 12px;
+  height: 18px;
+  background: var(--dialog);
+}
+
+.btn.sampler-talk.on,
+.btn.sampler-talk.on:hover:not(:disabled) {
+  color: var(--dialog);
+  background: color-mix(in srgb, var(--dialog) 22%, #1c232e);
+  border-color: color-mix(in srgb, var(--dialog) 55%, transparent);
+  box-shadow: none;
+}
+
+.sampler-mic {
+  min-width: 64px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  touch-action: none;
+}
+
+.btn.sampler-mic.asking,
+.btn.sampler-mic.asking:hover:not(:disabled) {
+  color: var(--warn);
+}
+
+/* On air: unmistakable, like a studio light. Must beat .btn:hover, which
+   pointer capture keeps on for the whole hold. */
+.btn.sampler-mic.live,
+.btn.sampler-mic.live:hover:not(:disabled) {
+  color: #07090c;
+  background: var(--bad);
+  border-color: var(--bad);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--bad) 65%, transparent);
+}
+
+.sampler-status.warn {
+  color: var(--warn);
+}
+
+.sampler-pads {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.dialog-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.dialog-slot.drop-target {
+  outline: 2px dashed var(--dialog);
+  outline-offset: 2px;
+}
+
+.dialog-pad {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 6px;
+  min-height: 56px;
+  padding: 6px 8px 8px;
+  overflow: hidden;
+  text-align: left;
+  color: var(--dialog);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dialog) 16%, #1c232e), color-mix(in srgb, var(--dialog) 7%, #151b23));
+  border: 1px solid color-mix(in srgb, var(--dialog) 45%, transparent);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--dialog) 70%, transparent);
+  cursor: pointer;
+}
+
+.dialog-pad.empty {
+  color: var(--text-dim);
+  background: linear-gradient(180deg, #1a2029, #141921);
+  border: 1px dashed var(--line-hi);
+  box-shadow: none;
+}
+
+/* No time line on an empty pad: centre its label on the number. */
+.dialog-pad.empty .dialog-title {
+  grid-row: 1 / 3;
+}
+
+.dialog-pad.playing {
+  color: #07090c;
+  background: var(--dialog);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--dialog) 60%, transparent);
+}
+
+/* Previewing in the headphones: a cue-yellow frame and a PFL badge, clearly
+   not the solid "on air" look. */
+.dialog-pad.previewing {
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  box-shadow: inset 0 0 0 1px var(--warn);
+}
+
+.dialog-pad.previewing::after {
+  content: 'PFL';
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.dialog-number {
+  grid-row: 1 / 3;
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 800;
+  opacity: 0.8;
+}
+
+.dialog-title {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dialog-time {
+  font-family: var(--font-num);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+/* Progress: scaled, not resized, so it never re-lays out the pad. */
+.dialog-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: #07090c;
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.dialog-tools {
+  display: flex;
+  gap: 3px;
+}
+
+.dialog-tool {
+  flex: 1 1 auto;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dialog-tool:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-hi);
+}
+
+.dialog-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 @media (max-width: 900px) {
   .console {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .sampler-pads {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .sampler-pads {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dialog-tool {
+    min-height: 32px;
+  }
+  .sampler-head .btn {
+    min-height: 40px;
+  }
+  /* Held with a thumb: a big target. */
+  .sampler-mic {
+    min-height: 44px;
+    min-width: 96px;
   }
 }
 

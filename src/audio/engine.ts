@@ -5,7 +5,8 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (cue-bus limiter, gain-reduction reading, click-free re-route)
- * Modified: Sep-26-2026 (soft-knee ceiling after both limiters)
+ * Modified: Sep-26-2026 (soft-knee ceiling after both limiters; music bus with
+ *   talk-over ducking and an input for the dialogue sampler)
  */
 import deckProcessorUrl from './worklets/deck-processor.ts?worker&url';
 import recorderProcessorUrl from './worklets/recorder-processor.ts?worker&url';
@@ -37,6 +38,8 @@ export class AudioEngine {
   readonly strips: [ChannelStrip, ChannelStrip];
   readonly masterAnalyser: AnalyserNode;
   private readonly masterGain: GainNode;
+  /** Both decks, before the master: ducked while a dialogue plays. */
+  private readonly musicBus: GainNode;
   private readonly masterOut: GainNode;
   private readonly cueBus: GainNode;
   /** Headphone blend: cue bus and master, then the headphone level. */
@@ -55,6 +58,8 @@ export class AudioEngine {
   private constructor(readonly ctx: AudioContext) {
     this.strips = [new ChannelStrip(ctx), new ChannelStrip(ctx)];
     this.masterGain = ctx.createGain();
+    this.musicBus = ctx.createGain();
+    this.musicBus.connect(this.masterGain);
     // Safety limiter: two full-scale decks summed would otherwise clip.
     this.limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.001, release: 0.1 });
     this.masterOut = ctx.createGain();
@@ -71,7 +76,7 @@ export class AudioEngine {
     this.headphoneLevel = ctx.createGain();
 
     for (const strip of this.strips) {
-      strip.output.connect(this.masterGain);
+      strip.output.connect(this.musicBus);
       strip.cueSend.connect(this.cueBus);
     }
     const [masterCeiling, masterCeilingOut] = ceiling(ctx);
@@ -91,6 +96,31 @@ export class AudioEngine {
   /** Input to the headphone cue bus (library prelisten plays here, never to master). */
   get cueInput(): AudioNode {
     return this.cueBus;
+  }
+
+  /**
+   * Input for sounds played over the mix (dialogue pads): joins the master
+   * before the limiter, so it is limited and recorded, and is not ducked.
+   */
+  get samplerInput(): AudioNode {
+    return this.masterGain;
+  }
+
+  /**
+   * Duck the decks by `db` (0 restores them). Fast attack so the first word
+   * is clear, slower release so the music does not pump back in.
+   */
+  duck(db: number): void {
+    const gain = this.musicBus.gain;
+    const now = this.ctx.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.setTargetAtTime(10 ** (db / 20), now, db < 0 ? 0.02 : 0.13);
+  }
+
+  /** Current deck-bus gain (1 = not ducked), for the UI and tests. */
+  get duckGain(): number {
+    return this.musicBus.gain.value;
   }
 
   /** Whether the headphone bus is routed to any output right now. */

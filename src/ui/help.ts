@@ -11,7 +11,7 @@ export class HelpDialog {
   readonly el: HTMLDialogElement;
 
   constructor() {
-    const groups = ['Deck A', 'Deck B', 'Mixer', 'Library', 'View'] as const;
+    const groups = ['Deck A', 'Deck B', 'Mixer', 'Library', 'Dialogues', 'View'] as const;
     const sections = groups.map((group) =>
       h('div', { class: 'help-group' }, [
         h('h3', { text: group }),
@@ -28,7 +28,7 @@ export class HelpDialog {
       h('div', { class: 'help-body' }, sections),
       h('p', {
         class: 'help-foot',
-        text: 'Press ? to toggle this list. Knobs: drag up/down (Shift for fine), scroll, or arrow keys; double-click resets. Ctrl+Z undoes the last load. CUE and hot cues on a stopped deck play while held; press PLAY during the hold to keep playing. Hot cue pads: Shift+click or right-click clears.',
+        text: 'Press ? to toggle this list. Knobs: drag up/down (Shift for fine), scroll, or arrow keys; double-click resets. Ctrl+Z undoes the last load. CUE and hot cues on a stopped deck play while held; press PLAY during the hold to keep playing. Hot cue pads: Shift+click or right-click clears. Dialogue pads: click plays or stops, Shift+click previews in the headphones, right-click clears; hold MIC to talk.',
       }),
     ]);
     close.addEventListener('click', () => this.el.close());

@@ -48,7 +48,7 @@ const port = 9322 + (process.pid % 400);
 const profile = mkdtempSync(join(tmpdir(), 'dj-e2e-'));
 const proc = spawn(
   bin,
-  ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--window-size=1280,1000', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, 'about:blank'],
+  ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--window-size=1280,1000', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 'about:blank'],
   { stdio: 'ignore' },
 );
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -645,8 +645,13 @@ try {
   await key('KeyG', 'g');
   await sleep(150);
   const suggested = await evaluate(visibleTitles);
+  // Deck A plays Demo House 124: once audible for 30 s it counts as played and
+  // rightly ranks last, so the expected order depends on the run's pace (this
+  // failed 1 run in 10 on a slow run until it asked the history).
+  const playedA = await evaluate(`[...window.dj.history.playedIds()].some((id) => window.dj.library.store.get().entries.find((e) => e.id === id)?.title === 'Demo House 124')`);
+  const expectedOrder = playedA ? ['Demo House 128', 'Demo House 124'] : ['Demo House 124', 'Demo House 128'];
   await key('KeyG', 'g');
-  check('Match ranks the best next track first', suggested[0] === 'Demo House 124' && suggested[1] === 'Demo House 128', JSON.stringify(suggested));
+  check('Match ranks the best next track first', suggested[0] === expectedOrder[0] && suggested[1] === expectedOrder[1], `${JSON.stringify(suggested)} (deck A track played: ${playedA})`);
 
   // Crates: create, add (and refuse a duplicate), view, remove.
   const libStatus = `document.querySelector('.library-toolbar .library-status:last-child').textContent`;
@@ -811,6 +816,75 @@ try {
   }
   await evaluate(`${deckExpr(0)}.pause()`);
   check('MIDI learn maps a new control and it works', learnedText === 'ch16 note 0x10' && afterLearned === !beforeLearned, `"${learnedText}", playing ${beforeLearned} -> ${afterLearned}`);
+
+  // ---- dialogue pads: drop a clip, fire it over the mix, talk-over, keys, restore ----
+  await evaluate(`window.dj.decks.forEach((d) => d.pause())`);
+  await evaluate(`(() => {
+    const rate = 44100, n = Math.round(rate * 1.5);
+    const bytes = new DataView(new ArrayBuffer(44 + n * 2));
+    const text = (o, t) => [...t].forEach((c, i) => bytes.setUint8(o + i, c.charCodeAt(0)));
+    text(0, 'RIFF'); bytes.setUint32(4, 36 + n * 2, true); text(8, 'WAVE'); text(12, 'fmt ');
+    bytes.setUint32(16, 16, true); bytes.setUint16(20, 1, true); bytes.setUint16(22, 1, true);
+    bytes.setUint32(24, rate, true); bytes.setUint32(28, rate * 2, true); bytes.setUint16(32, 2, true);
+    bytes.setUint16(34, 16, true); text(36, 'data'); bytes.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) bytes.setInt16(44 + i * 2, Math.round(Math.sin(2 * Math.PI * 330 * i / rate) * 0.5 * 32767), true);
+    const file = new File([bytes.buffer], 'Punch Line.wav', { type: 'audio/wav' });
+    const slot = document.querySelectorAll('.dialog-slot')[0];
+    slot.scrollIntoView({ block: 'center' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    slot.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    slot.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  })()`);
+  await waitFor(`window.dj.sampler.store.get().pads[0].title === 'Punch Line'`, 5000, 'clip on pad 1');
+  const padTitle = await evaluate(`document.querySelectorAll('.dialog-pad')[0].querySelector('.dialog-title').textContent`);
+  check('a clip dropped on a pad is assigned and shown', padTitle === 'Punch Line', `"${padTitle}", status "${await evaluate('window.dj.sampler.store.get().status')}"`);
+
+  const padRect = await evaluate(`(() => { const r = document.querySelectorAll('.dialog-pad')[0].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: padRect.x, y: padRect.y, button: 'left', clickCount: 1 });
+  await sleep(250);
+  const firing = await evaluate(`(async () => {
+    let peak = 0;
+    for (let i = 0; i < 8; i++) { peak = Math.max(peak, window.dj.engine.meter(window.dj.engine.masterAnalyser).peak); await new Promise((r) => setTimeout(r, 40)); }
+    return { playing: window.dj.sampler.store.get().pads[0].playing, lit: document.querySelectorAll('.dialog-pad')[0].classList.contains('playing'), peak, duck: window.dj.engine.duckGain };
+  })()`);
+  check('a pad click plays the clip over the master, lit, with the music ducked -10 dB', firing.playing && firing.lit && firing.peak > 0.1 && Math.abs(20 * Math.log10(firing.duck) + 10) < 1.5, JSON.stringify(firing));
+  await waitFor(`!window.dj.sampler.store.get().pads[0].playing`, 4000, 'clip end');
+  await sleep(900);
+  const ended = await evaluate(`({ lit: document.querySelectorAll('.dialog-pad')[0].classList.contains('playing'), duck: window.dj.engine.duckGain })`);
+  check('the clip ends by itself, the pad goes dark and the music comes back', !ended.lit && ended.duck > 0.9, JSON.stringify(ended));
+
+  await key('Numpad1', '1');
+  await sleep(150);
+  const byKey = await evaluate('window.dj.sampler.store.get().pads[0].playing');
+  await key('KeyB', 'b');
+  await sleep(150);
+  const stopped = await evaluate(`({ playing: window.dj.sampler.store.get().pads[0].playing, status: window.dj.sampler.store.get().status })`);
+  check('Numpad 1 fires pad 1 and B stops every dialogue', byKey && !stopped.playing && stopped.status === 'Stopped 1 dialogue', `key ${byKey}, ${JSON.stringify(stopped)}`);
+  await evaluate(`document.querySelectorAll('.dialog-pad')[7].click()`);
+  check('an empty pad says so', (await evaluate('window.dj.sampler.store.get().status')) === 'Pad 8 is empty: drop a clip on it', await evaluate('window.dj.sampler.store.get().status'));
+
+  // Push-to-talk with Chrome's fake microphone (a steady beep): hold is live and ducks, release mutes.
+  await pointer('.sampler-panel', 'MIC', 'mousePressed');
+  await waitFor(`window.dj.mic.live`, 5000, 'mic live').catch(() => undefined);
+  await sleep(300);
+  // The fake microphone beeps about once a second with silence between: listen
+  // for 1.5 s, or the window can fall between beeps (failed 2 runs in 10 at 0.32 s).
+  const talking = await evaluate(`(async () => {
+    let peak = 0;
+    for (let i = 0; i < 30; i++) { peak = Math.max(peak, window.dj.engine.meter(window.dj.engine.masterAnalyser).peak); await new Promise((r) => setTimeout(r, 50)); }
+    const b = [...document.querySelectorAll('.sampler-panel button')].find((x) => x.classList.contains('sampler-mic'));
+    return { live: window.dj.mic.live, label: b.textContent, peak, duck: window.dj.engine.duckGain, status: window.dj.mic.store.get().status };
+  })()`);
+  await pointer('.sampler-panel', 'ON AIR', 'mouseReleased');
+  await sleep(900);
+  const muted = await evaluate(`({ live: window.dj.mic.live, label: document.querySelector('.sampler-mic').textContent, duck: window.dj.engine.duckGain })`);
+  check('holding MIC puts the mic on air over the master and ducks the music; release mutes', talking.live && talking.label === 'ON AIR' && talking.peak > 0.01 && talking.duck < 0.5 && !muted.live && muted.label === 'MIC' && muted.duck > 0.9, `${JSON.stringify(talking)} -> ${JSON.stringify(muted)}`);
+
+  await send('Page.navigate', { url: url.href });
+  await waitFor(`window.dj && window.dj.sampler && window.dj.sampler.store.get().pads[0].title === 'Punch Line'`, 15000, 'pads restored after reload').catch(() => undefined);
+  const restoredPad = await evaluate(`window.dj?.sampler?.store.get().pads[0].title ?? null`);
+  check('dialogue pads survive a reload', restoredPad === 'Punch Line', String(restoredPad));
 
   if (shot) {
     await evaluate('window.scrollTo(0, 0)');

@@ -4,6 +4,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (dialogue pads, level and mic are learnable)
  */
 import { getSetting, setSetting } from '../library/db';
 import { DEFAULT_MIDI_MAP, type MidiBinding, type MidiInput, type MidiMessage, type MidiMode } from '../input/midi';
@@ -54,6 +55,10 @@ function learnables(): Learnable[] {
   list.push({ action: 'mixer.master', label: 'Master level', group: 'Mixer', mode: 'absolute' });
   list.push({ action: 'mixer.cueVolume', label: 'Headphone level', group: 'Mixer', mode: 'absolute' });
   list.push({ action: 'mixer.cueMix', label: 'Cue mix', group: 'Mixer', mode: 'absolute' });
+  for (let i = 1; i <= 8; i++) list.push({ action: `sampler.pad${i}`, label: `Pad ${i}`, group: 'Dialogues', mode: 'button' });
+  list.push({ action: 'sampler.stop', label: 'Stop all', group: 'Dialogues', mode: 'button' });
+  list.push({ action: 'sampler.level', label: 'Dialogue level', group: 'Dialogues', mode: 'absolute' });
+  list.push({ action: 'sampler.mic', label: 'Mic (hold to talk)', group: 'Dialogues', mode: 'button' });
   return list;
 }
 

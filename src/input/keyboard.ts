@@ -8,6 +8,8 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (sliders keep only arrow keys, hold cue and pads,
  *   shortcuts blocked behind the help dialog, Shift+Down recentres)
+ * Modified: Sep-26-2026 (dialogue pads on Numpad 1-8, B stops them, hold
+ *   Numpad 0 to talk)
  */
 import type { Actions } from './actions';
 
@@ -23,7 +25,7 @@ export interface KeyBinding {
   /** Send 1 on press and 0 on release (pitch bend). */
   hold?: boolean;
   description: string;
-  group: 'Deck A' | 'Deck B' | 'Mixer' | 'View' | 'Library';
+  group: 'Deck A' | 'Deck B' | 'Mixer' | 'View' | 'Library' | 'Dialogues';
 }
 
 function deckKeys(deck: 'A' | 'B', keys: Record<string, string>, cues: string[]): KeyBinding[] {
@@ -70,6 +72,10 @@ export const KEYMAP: KeyBinding[] = [
   { code: 'ArrowDown', key: 'Down', action: 'library.down', description: 'Select the next track', group: 'Library' },
   { code: 'KeyG', key: 'G', action: 'library.match', description: 'Suggest next (Match) on / off', group: 'Library' },
   { code: 'KeyV', key: 'V', action: 'library.crate', description: 'Add the selected track to the crate', group: 'Library' },
+  // Dialogue pads: the numpad (every letter is taken by the decks), B stops them all.
+  ...Array.from({ length: 8 }, (_, i): KeyBinding => ({ code: `Numpad${i + 1}`, key: `Num ${i + 1}`, action: `sampler.pad${i + 1}`, description: `Dialogue pad ${i + 1}: play / stop`, group: 'Dialogues' })),
+  { code: 'KeyB', key: 'B', action: 'sampler.stop', description: 'Stop every dialogue', group: 'Dialogues' },
+  { code: 'Numpad0', key: 'Num 0', action: 'sampler.mic', hold: true, description: 'Mic: hold to talk live over the mix', group: 'Dialogues' },
 ];
 
 /** Keys a focused slider handles itself. */
@@ -80,9 +86,11 @@ const SLIDER_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 
  * range slider owns only its navigation keys. Treating sliders as text fields
  * killed every shortcut after any mouse touch on a fader.
  */
-function ownsKey(target: EventTarget | null, key: string): boolean {
+function ownsKey(target: EventTarget | null, key: string, code = ''): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  if (target instanceof HTMLInputElement && target.type === 'range') return SLIDER_KEYS.has(key);
+  // Numpad keys with NumLock off report arrow and Home/End keys: they still
+  // fire dialogue pads, never move a focused slider.
+  if (target instanceof HTMLInputElement && target.type === 'range') return SLIDER_KEYS.has(key) && !code.startsWith('Numpad');
   return target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName);
 }
 
@@ -95,7 +103,7 @@ export function attachKeyboard(actions: Actions, onHelp: () => void, isBlocked: 
   const modalOpen = (): boolean => isBlocked() || document.querySelector('dialog[open]') !== null;
   const byCode = new Map(KEYMAP.map((b) => [b.code, b]));
   window.addEventListener('keydown', (event) => {
-    if (event.ctrlKey || event.metaKey || event.altKey || ownsKey(event.target, event.key)) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || ownsKey(event.target, event.key, event.code)) return;
     if (event.key === '?') {
       event.preventDefault();
       onHelp();
