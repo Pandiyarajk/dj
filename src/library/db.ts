@@ -16,7 +16,7 @@ import type { SavedTrackData } from '../audio/deck-controller';
  * or the peaks format changes: older records then get re-analysed on their
  * next load (keeping their cues and tags) instead of serving stale results.
  */
-export const ANALYSIS_VERSION = 7;
+export const ANALYSIS_VERSION = 8;
 
 export interface CachedTrack extends SavedTrackData {
   key: string;

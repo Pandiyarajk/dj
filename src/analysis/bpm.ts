@@ -9,13 +9,19 @@
  *      40 s excerpt, folded into [MIN_BPM, MAX_BPM), plus doubles and halves.
  *   3. Selection: a comb scored on the excerpt; the candidate whose beats carry
  *      the most onset energy wins.
- *   4. Octave check: a slow winner whose off-beats are strong is really twice
- *      as fast (drum and bass read as 87, or 140 house read as 70).
+ *   4. Octave choice: half, same and double tempo are weighed by their comb
+ *      score times a tempo prior centred on 135 BPM.
  *   5. Precision: the comb over the whole track, with a step scaled to its
  *      length so it cannot drift more than 4 ms end to end.
+ *   6. Beat gate, three checks that each catch what the others miss: enough
+ *      onset strength at all (steady tones), a grid that stands out from the
+ *      same comb at every other phase (noise), and from the envelope's mean
+ *      (beatless music). Otherwise the track has no steady beat.
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (phase z-score gate added; onset-strength gate
+ *   lowered from 0.8 to 0.5, which rejected three of ten real songs)
  */
 import { LowPass } from './filters';
 
@@ -45,11 +51,21 @@ const PRIOR_OCTAVES = 0.75;
 /** Below this beat confidence the track is treated as having no steady beat. */
 const MIN_CONFIDENCE = 0.6;
 /**
- * Below this mean onset strength there are no real onsets at all (steady
- * tones, DC, hum): measured 1.5-2.5 on beat tracks, 0.05-0.8 on non-music.
- * A steady square wave otherwise read 74 BPM at confidence 0.74.
+ * Below this mean onset strength there are no real onsets at all: steady
+ * tones and square waves measured 0.05-0.30, real mastered songs 0.71-1.09.
+ * It was 0.8, tuned on synthetic tracks (1.5-2.5), and rejected three of ten
+ * real songs whose tempo was right.
  */
-const MIN_ENVELOPE = 0.8;
+const MIN_ENVELOPE = 0.5;
+/**
+ * How far the winning grid's comb score must stand above the same comb at
+ * every other phase, in standard deviations. Noise measured 1.85-2.47 (white
+ * noise has onset strength 0.57, brown noise 0.92, which read 131.5 BPM), real
+ * songs 2.91-6.39, synthetic beat tracks 4.0-6.1.
+ */
+const MIN_PHASE_Z = 2.7;
+/** Phase step for the z-score, frames. */
+const PHASE_Z_STEP = 0.5;
 /** Seconds of envelope used to rank candidates: long enough to separate them, short enough that a coarse step cannot drift off the beats. */
 const EXCERPT_SECONDS = 40;
 /** Largest drift, in seconds, the final tempo step may cause across the whole track. */
@@ -276,6 +292,22 @@ function excerpt(env: Envelope, seconds: number): Envelope {
   return { ...env, values: values.subarray(best, best + length) };
 }
 
+/** How many standard deviations the comb at `phase` stands above the same comb at every phase. */
+function phaseZ(values: Float32Array, period: number, score: number): number {
+  let sum = 0;
+  let squares = 0;
+  let count = 0;
+  for (let phase = 0; phase < period; phase += PHASE_Z_STEP) {
+    const s = combMean(values, period, phase);
+    sum += s;
+    squares += s * s;
+    count++;
+  }
+  const mean = sum / count;
+  const sd = Math.sqrt(Math.max(0, squares / count - mean * mean));
+  return sd > 0 ? (score - mean) / sd : 0;
+}
+
 /** Tempo prior: a log-normal preference around PRIOR_BPM (DJ music clusters there). */
 function prior(bpm: number): number {
   const octaves = Math.log2(bpm / PRIOR_BPM);
@@ -330,6 +362,7 @@ export function detectBpm(samples: Float32Array, sampleRate: number): BpmResult 
   for (let i = 0; i < env.values.length; i++) mean += env.values[i];
   mean /= env.values.length;
   if (result.score <= 0 || mean < MIN_ENVELOPE) return null;
+  if (phaseZ(env.values, (env.frameRate * 60) / result.bpm, result.score) < MIN_PHASE_Z) return null;
 
   // Onset flux peaks at the frame where the energy jump starts: reporting the
   // frame centre (+half a hop) put every grid 2.0-4.0 ms late on the corpus.

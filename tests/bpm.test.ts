@@ -3,6 +3,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (brown noise must read no beat)
  */
 import { describe, expect, it } from 'vitest';
 import { detectBpm } from '../src/analysis/bpm';
@@ -78,6 +79,9 @@ describe('detectBpm', () => {
     expect(detectBpm(new Float32Array(n).fill(0.5), SAMPLE_RATE)).toBeNull();
     expect(detectBpm(Float32Array.from({ length: n }, (_, i) => (Math.sin((2 * Math.PI * 220 * i) / SAMPLE_RATE) > 0 ? 0.9 : -0.9)), SAMPLE_RATE)).toBeNull();
     expect(detectBpm(Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin((2 * Math.PI * 440 * i) / SAMPLE_RATE)), SAMPLE_RATE)).toBeNull();
+    // Brown-ish noise: its onset strength is as high as a real song's, and it read 131.5 BPM.
+    let y = 0;
+    expect(detectBpm(Float32Array.from({ length: n }, () => (y = 0.98 * y + 0.2 * noise())), SAMPLE_RATE)).toBeNull();
   });
 
   it('returns null for silence and for audio too short to analyse', () => {
