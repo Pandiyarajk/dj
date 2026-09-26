@@ -7,7 +7,8 @@
  *   icons, LCD readouts; hot-cue colours, track-end warning, limiter LED,
  *   phase meter, zoom, tablet and phone layouts, reduced-motion feedback)
  * Modified: Sep-26-2026 (library load and +/- columns no longer clip; top
- *   bar wraps on phones instead of scrolling the page sideways; dialogue pads)
+ *   bar wraps on phones instead of scrolling the page sideways; dialogue pads;
+ *   PERFORM fits the dialogue pads on a 1280x800 screen; its TRIM hide selector now matches)
  *
  * System fonts only: the app makes no network requests, so a font CDN would
  * break the "your music stays on your machine" promise.
@@ -358,7 +359,7 @@ body.perform .dialog-tools,
 body.perform .grid-row,
 body.perform .loop-row:has(.btn[aria-label^='Loop in point']),
 body.perform .autogain-readout,
-body.perform .channel-strip > .knob:first-of-type,
+body.perform .channel-strip > .channel-id + .knob,
 body.perform .crate-toolbar,
 body.perform .listen-bar:not(.active),
 body.perform .zoom-tools,
@@ -366,16 +367,96 @@ body.perform .phase-meter .phase-bar {
   display: none;
 }
 
-body.perform .dialog-pad {
-  min-height: 42px;
-}
-
 body.perform .library-table-wrap {
   max-height: 150px;
 }
 
 body.perform .wave {
-  height: 70px;
+  height: 54px;
+}
+
+/* PERFORM fits the dialogue pads on a laptop screen (1280x800) without
+   scrolling. The console row is as tall as its tallest column, so the mixer
+   and the deck shrink together: the deck used to stretch to the mixer and
+   leave ~150 px of dead space above CUE/PLAY. Knob values become overlays
+   (as on tablets), the fader minimums come down, and the hot-cue pads take
+   what little height is left, so CUE/PLAY still lines up with the crossfader. */
+body.perform .deck,
+body.perform .mixer {
+  gap: 6px;
+}
+
+body.perform .deck-main {
+  gap: 5px;
+}
+
+body.perform .overview {
+  height: 40px;
+}
+
+body.perform .pads {
+  grid-auto-rows: minmax(34px, 56px);
+  max-height: 120px;
+}
+
+body.perform .tempo-fader {
+  min-height: 110px;
+}
+
+body.perform .btn-play,
+body.perform .btn-cue {
+  height: 44px;
+}
+
+body.perform .fader-meter {
+  min-height: 100px;
+}
+
+body.perform .master-meter {
+  height: 80px;
+}
+
+body.perform .channel-strip,
+body.perform .master-strip {
+  gap: 4px;
+}
+
+body.perform .knob {
+  position: relative;
+}
+
+body.perform .knob-dial {
+  width: 34px;
+  height: 34px;
+}
+
+body.perform .knob-readout {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  visibility: hidden;
+}
+
+body.perform .knob:hover .knob-readout,
+body.perform .knob.dragging .knob-readout,
+body.perform .knob:focus-within .knob-readout {
+  visibility: visible;
+}
+
+body.perform .sampler-panel {
+  gap: 5px;
+  padding: 6px 10px 8px;
+}
+
+body.perform .dialog-pad {
+  min-height: 40px;
+  padding: 4px 8px 6px;
 }
 
 .hints {

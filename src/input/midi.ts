@@ -11,7 +11,9 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (14-bit CC pairs, jog wheels, shift layer, LED
  *   output, learn hook)
- * Modified: Sep-26-2026 (14-bit controls, jog wheels, SHIFT layer, LED feedback)
+ * Modified: Sep-26-2026 (14-bit controls, jog wheels, SHIFT layer, LED
+ *   feedback; dialogue pad and MIC LEDs: lit with a clip, blinking while
+ *   playing; MIC lit while live)
  */
 import { Store } from '../state/store';
 import type { Actions } from './actions';
@@ -76,6 +78,28 @@ export const DEFAULT_MIDI_MAP: MidiBinding[] = [
   { kind: 'cc', channel: 6, number: 0x17, action: 'mixer.A.filter', mode: 'absolute' },
   { kind: 'cc', channel: 6, number: 0x18, action: 'mixer.B.filter', mode: 'absolute' },
 ];
+
+/** Half a blink cycle, ms, for a flashing LED (the waveform's end warning uses the same). */
+export const LED_BLINK_MS = 400;
+
+/**
+ * LED states for the dialogue pads and the mic, in the shape `setLedSource`
+ * takes. LEDs are on/off only, so a pad with a clip is lit, a playing pad (on
+ * the master or previewing in the headphones) blinks, and an empty pad is
+ * dark. MIC is lit while the mic is live.
+ *
+ * @param pads   pad states in pad order (pad 1 first).
+ * @param micLive whether the mic is on air.
+ * @param now    clock in ms (performance.now()), which drives the blink.
+ * @returns action name -> lit, for `sampler.pad1..8` and `sampler.mic`.
+ */
+export function samplerLeds(pads: readonly { title: string | null; playing: boolean }[], micLive: boolean, now: number): Map<string, boolean> {
+  const lit = new Map<string, boolean>();
+  const blinkOn = Math.floor(now / LED_BLINK_MS) % 2 === 0;
+  pads.forEach((pad, i) => lit.set(`sampler.pad${i + 1}`, pad.title !== null && (!pad.playing || blinkOn)));
+  lit.set('sampler.mic', micLive);
+  return lit;
+}
 
 /** A decoded MIDI message. */
 export interface MidiMessage {

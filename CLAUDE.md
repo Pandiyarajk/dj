@@ -82,7 +82,7 @@ MIDI), `scripts/` (e2e driver, corpus generator), `tests/` (Vitest).
   only arrow keys, never the letter shortcuts.
 - The compressor's `reduction` freezes when its input goes silent: gate the
   LIMIT light on signal.
-- `npm run e2e` has 70 checks; soak it (10+ runs) after touching sync, the
+- `npm run e2e` has 71 checks; soak it (10+ runs) after touching sync, the
   worklet or the library: several bugs here showed up 1 run in 5 to 1 in 12.
 - Worklet code is unit-tested through `tests/worklet-harness.ts` (stubs the
   AudioWorkletGlobalScope). Loop points are fractional frames: floor any
