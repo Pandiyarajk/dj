@@ -8,6 +8,7 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (atomic merged writes, analysis versioning, per-deck
  *   cancellable analysis, flush on page hide, lower peak memory, undo last load)
+ * Modified: Sep-26-2026 (hot cues saved slot by slot; tempoChanges cached)
  */
 import { AnalysisClient, type AnalysisResult } from '../analysis/analysis-client';
 import { formatTime, type DeckController, type SavedTrackData, type TrackInfo } from '../audio/deck-controller';

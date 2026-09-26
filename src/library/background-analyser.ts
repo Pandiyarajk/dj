@@ -8,7 +8,7 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-26-2026 (failures named in the status; tracks with no beat
- *   or key are not re-analysed on every press)
+ *   or key are not re-analysed on every press; tempoChanges cached)
  */
 import { AnalysisClient } from '../analysis/analysis-client';
 import { HOT_CUE_COUNT, type DeckController } from '../audio/deck-controller';

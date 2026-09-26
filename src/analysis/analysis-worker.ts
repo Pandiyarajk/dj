@@ -5,6 +5,7 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (stereo input, loudness and key)
+ * Modified: Sep-26-2026 (tempoChanges passed through)
  */
 import { detectBpm } from './bpm';
 import { detectKey } from './key';

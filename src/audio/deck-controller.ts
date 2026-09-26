@@ -9,6 +9,7 @@
  * Modified: Sep-25-2026 (loop validation, phase-preserving jumps, CDJ-style
  *   hold-to-preview cue and hot-cue gate, auto cue, BPM x2 / /2, seq on
  *   play/pause, loop-aware heard position, on-air lock, key, auto-gain)
+ * Modified: Sep-26-2026 (fail() clears the deck; status says when the tempo changes)
  */
 import { autoCuePoint } from '../analysis/auto-cue';
 import { autoGainDb } from '../analysis/loudness';
