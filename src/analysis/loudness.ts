@@ -11,6 +11,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (minimum gated blocks, no boost near silence, -14 LUFS target)
  */
 
 /** Direct-form biquad with state, fed one sample at a time. */

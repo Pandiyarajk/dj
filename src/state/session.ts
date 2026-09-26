@@ -7,6 +7,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (localStorage mirror written on page hide)
  */
 import type { DeckController } from '../audio/deck-controller';
 import { defaultChannel, defaultMixer, type MixerState } from '../audio/mixer';

@@ -3,6 +3,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (Dialogues group and pad gestures)
  */
 import { KEYMAP } from '../input/keyboard';
 import { h } from './dom';

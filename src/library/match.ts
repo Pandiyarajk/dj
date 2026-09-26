@@ -4,6 +4,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (suggest-next ranking)
  */
 import { compatibleKeys } from '../analysis/key';
 import { tempoForSync } from '../audio/sync';

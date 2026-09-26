@@ -7,6 +7,7 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (single streaming pass; per-band robust normalisation)
+ * Modified: Sep-26-2026 (DC blocker and a -40 dBFS normalisation floor)
  */
 import { LowPass } from './filters';
 

@@ -11,6 +11,7 @@
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (14-bit CC pairs, jog wheels, shift layer, LED
  *   output, learn hook)
+ * Modified: Sep-26-2026 (14-bit controls, jog wheels, SHIFT layer, LED feedback)
  */
 import { Store } from '../state/store';
 import type { Actions } from './actions';

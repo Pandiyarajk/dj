@@ -3,6 +3,7 @@
  *
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
+ * Modified: Sep-26-2026 (output ceiling curve)
  */
 import { describe, expect, it } from 'vitest';
 import {

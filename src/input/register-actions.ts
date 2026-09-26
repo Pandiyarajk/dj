@@ -7,6 +7,7 @@
  * Author: Pandiyaraj Karuppasamy
  * Date: Sep-25-2026
  * Modified: Sep-25-2026 (hold CUE and hot cues, BPM x2 / /2, filter)
+ * Modified: Sep-26-2026 (controller actions for jog wheels and SHIFT)
  */
 import { HOT_CUE_COUNT, LOOP_SIZES, type DeckController } from '../audio/deck-controller';
 import { EQ_MAX_DB, EQ_MIN_DB, TRIM_MAX_DB, TRIM_MIN_DB, type ChannelSettings, type EqBand, type MixerState } from '../audio/mixer';
